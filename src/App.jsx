@@ -1,22 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Home, Zap, MessagesSquare, CalendarDays, UserRound } from "lucide-react";
+import { Home, MessagesSquare, CalendarDays, UserRound } from "lucide-react";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import { supabase, configured } from "./supabase.js";
 import { C, FONT, ToastProvider, Avatar } from "./ui.jsx";
-import { currentCycle } from "./lib/schedule.js";
+import { ymd } from "./lib/schedule.js";
 import AuthScreen from "./screens/Auth.jsx";
 import OnboardingScreen from "./screens/Onboarding.jsx";
 import HomeScreen from "./screens/Home.jsx";
-import BookScreen from "./screens/Book.jsx";
+import ScheduleScreen from "./screens/Schedule.jsx";
 import CommunityScreen from "./screens/Community.jsx";
-import CalendarScreen from "./screens/Calendar.jsx";
 import MoreScreen from "./screens/More.jsx";
 
 const TABS = [
   { id: "home", label: "홈", icon: Home },
-  { id: "book", label: "신청", icon: Zap },
+  { id: "schedule", label: "일정", icon: CalendarDays },
   { id: "community", label: "모집", icon: MessagesSquare },
-  { id: "calendar", label: "캘린더", icon: CalendarDays },
   { id: "more", label: "전체", icon: UserRound },
 ];
 
@@ -126,62 +124,65 @@ function Splash() {
 function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reloadMemberships }) {
   const [tab, setTab] = useState("home");
   const [org, setOrg] = useState(membership.orgs);
-  const [slots, setSlots] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [opens, setOpens] = useState([]);
   const [signups, setSignups] = useState([]);
-  const [events, setEvents] = useState([]);
+  const [posts, setPosts] = useState([]);
   const [members, setMembers] = useState([]);
-  const [allConfirmed, setAllConfirmed] = useState([]); // 참여 통계용
   const [loaded, setLoaded] = useState(false);
+  const [schedDate, setSchedDate] = useState(() => ymd(new Date()));
   const scrollRef = useRef(null);
 
   const orgId = membership.org_id;
   const uid = session.user.id;
   const isAdmin = membership.role === "admin";
-  const cycle = currentCycle(org, slots);
 
   const { needRefresh: [needRefresh], updateServiceWorker } = useRegisterSW();
 
   const reload = useCallback(async () => {
-    const { data: orgRow } = await supabase.from("orgs").select("*").eq("id", orgId).single();
-    const { data: slotRows } = await supabase.from("class_slots").select("*").eq("org_id", orgId)
-      .order("day_of_week").order("start_time");
-    const freshOrg = orgRow || org;
-    const freshSlots = slotRows || [];
-    const wk = currentCycle(freshOrg, freshSlots).weekKey;
-    const [{ data: su }, { data: ev }, { data: mem }, { data: ac }] = await Promise.all([
-      supabase.from("signups").select("*, profiles(name)").eq("org_id", orgId).eq("week_key", wk).order("created_at"),
-      supabase.from("events").select("*").eq("org_id", orgId).order("date"),
+    const [{ data: orgRow }, { data: acts }, { data: su }, { data: po }, { data: mem }] = await Promise.all([
+      supabase.from("orgs").select("*").eq("id", orgId).single(),
+      supabase.from("activities").select("*").eq("org_id", orgId).order("created_at"),
+      supabase.from("activity_signups").select("*, profiles(name)").eq("org_id", orgId).order("created_at"),
+      supabase.from("posts").select("*, post_joins(user_id, user_name)").order("created_at", { ascending: false }).limit(200),
       supabase.from("memberships").select("user_id, role, profiles(name)").eq("org_id", orgId),
-      supabase.from("signups").select("user_id").eq("org_id", orgId).eq("status", "confirmed"),
     ]);
-    setOrg(freshOrg); setSlots(freshSlots);
-    setSignups(su || []); setEvents(ev || []); setMembers(mem || []); setAllConfirmed(ac || []);
+    const ids = (acts || []).map((a) => a.id);
+    const { data: ops } = ids.length
+      ? await supabase.from("activity_opens").select("*").in("activity_id", ids)
+      : { data: [] };
+    if (orgRow) setOrg(orgRow);
+    setActivities(acts || []); setOpens(ops || []);
+    setSignups(su || []); setPosts(po || []); setMembers(mem || []);
     setLoaded(true);
   }, [orgId]);
 
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: 0 }); }, [tab]);
 
-  // 실시간: 누군가 신청/취소하면 즉시 반영
+  // 실시간: 신청/취소·일정 변경·모집글 참여가 즉시 반영
   useEffect(() => {
     const ch = supabase
-      .channel("signups-" + orgId)
-      .on("postgres_changes", { event: "*", schema: "public", table: "signups", filter: `org_id=eq.${orgId}` }, () => reload())
+      .channel("org-" + orgId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "activity_signups", filter: `org_id=eq.${orgId}` }, () => reload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "activities", filter: `org_id=eq.${orgId}` }, () => reload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "activity_opens" }, () => reload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => reload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "post_joins" }, () => reload())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [orgId, reload]);
 
   const counts = {};
-  for (const r of allConfirmed) counts[r.user_id] = (counts[r.user_id] || 0) + 1;
+  for (const r of signups) if (r.status === "confirmed") counts[r.user_id] = (counts[r.user_id] || 0) + 1;
 
   const ctx = {
-    uid, profile, org, orgId, isAdmin, slots, signups, events, members, counts,
-    cycle, reload, setTab, myOrgs, switchOrg, addOrg, reloadMemberships,
+    uid, profile, org, orgId, isAdmin, activities, opens, signups, posts, members, counts,
+    reload, setTab, schedDate, setSchedDate, myOrgs, switchOrg, addOrg, reloadMemberships,
   };
 
   const TITLES = {
-    home: org.name, book: "선착순 신청", community: "모집 게시판",
-    calendar: "캘린더", more: "전체",
+    home: org.name, schedule: "일정", community: "모집 게시판", more: "전체",
   };
 
   return (
@@ -218,9 +219,8 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
           {!loaded ? <Splash /> : (
             <>
               {tab === "home" && <HomeScreen {...ctx} />}
-              {tab === "book" && <BookScreen {...ctx} />}
+              {tab === "schedule" && <ScheduleScreen {...ctx} />}
               {tab === "community" && <CommunityScreen {...ctx} />}
-              {tab === "calendar" && <CalendarScreen {...ctx} />}
               {tab === "more" && <MoreScreen {...ctx} />}
             </>
           )}

@@ -1,6 +1,7 @@
 -- ============================================================
--- 스매시 (동아리 운영 PWA) 데이터베이스 스키마
--- Supabase 대시보드 > SQL Editor 에 전체를 붙여넣고 Run 하세요.
+-- Universe (동아리 운영 PWA) 데이터베이스 스키마 v2 — 통합 일정 시스템
+-- Supabase 대시보드 > SQL Editor 에 전체를 붙여넣고 Run 하세요. (새 프로젝트용)
+-- 기존 v1 스키마에서 업그레이드하려면 migration-v2.sql 을 실행하세요.
 -- ============================================================
 
 -- ────────────── 테이블 ──────────────
@@ -15,10 +16,6 @@ create table public.orgs (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   description text,
-  open_day int not null default 0,            -- 자동 오픈 요일 (0=일 ~ 6=토)
-  open_time time not null default '21:00',    -- 자동 오픈 시각
-  override_state text,                        -- 'open' | 'closed' | null(자동)
-  override_week text,                         -- override가 적용되는 주 (해당 주 월요일 YYYY-MM-DD)
   created_by uuid references public.profiles(id),
   created_at timestamptz not null default now()
 );
@@ -36,35 +33,47 @@ create table public.memberships (
   primary key (org_id, user_id)
 );
 
-create table public.class_slots (
+-- 일정 (레슨·행사 통합)
+create table public.activities (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs on delete cascade,
-  day_of_week int not null,                   -- 0=일 ~ 6=토
-  start_time time not null,
-  end_time time not null,
-  capacity int not null default 6,
-  created_at timestamptz not null default now()
+  type text not null default 'lesson',        -- 'lesson'(레슨) | 'event'(행사)
+  title text not null,
+  description text,
+  location text,
+  repeat_weekly boolean not null default false,
+  day_of_week int,                            -- 반복 일정: 요일 (0=일 ~ 6=토)
+  event_date date,                            -- 단일 일정: 날짜
+  start_time time,
+  end_time time,
+  capacity int,                               -- null = 인원 제한 없음
+  open_rule_day int,                          -- 반복 일정 신청 오픈 규칙: 요일 (null = 수동 오픈만)
+  open_rule_time time,                        -- 반복 일정 신청 오픈 규칙: 시각
+  created_by uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  check (repeat_weekly = (day_of_week is not null)),
+  check (repeat_weekly or event_date is not null),
+  check (capacity is null or (capacity >= 0 and capacity <= 50))
 );
 
-create table public.signups (
+-- 회차별 수동 오픈/마감 (관리자 오버라이드)
+create table public.activity_opens (
+  activity_id uuid not null references public.activities on delete cascade,
+  occ_date date not null,
+  state text not null,                        -- 'open' | 'closed'
+  primary key (activity_id, occ_date)
+);
+
+-- 일정 참가 신청 (회차 단위)
+create table public.activity_signups (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs on delete cascade,
-  slot_id uuid not null references public.class_slots on delete cascade,
-  week_key text not null,                     -- 대상 주 월요일 (YYYY-MM-DD)
+  activity_id uuid not null references public.activities on delete cascade,
+  occ_date date not null,                     -- 회차 날짜
   user_id uuid not null references public.profiles on delete cascade,
   status text not null,                       -- 'confirmed' | 'waitlist'
   created_at timestamptz not null default now(),
-  unique (slot_id, week_key, user_id)
-);
-
-create table public.events (
-  id uuid primary key default gen_random_uuid(),
-  org_id uuid not null references public.orgs on delete cascade,
-  date date not null,
-  title text not null,
-  description text,
-  created_by uuid references public.profiles(id),
-  created_at timestamptz not null default now()
+  unique (activity_id, occ_date, user_id)
 );
 
 create table public.posts (
@@ -152,81 +161,137 @@ begin
   return v_org;
 end $$;
 
--- ────────────── 선착순 신청 / 취소 (동시 클릭 안전) ──────────────
+-- ────────────── 일정 오픈 상태 계산 ──────────────
+-- 'open' | 'closed' | 'before'(오픈 전) | 'ended'(종료)
+-- 우선순위: 종료 여부 > 수동 오버라이드 > (단일: 항상 오픈) > (반복: 오픈 규칙)
+-- 반복 일정의 오픈 규칙: 회차 날짜 직전의 open_rule_day open_rule_time 에 열림 (1~7일 전)
 
-create or replace function public.signup_slot(p_slot uuid, p_week text)
-returns text language plpgsql security definer set search_path = public as $$
-declare v_org uuid; v_cap int; v_count int; v_status text;
+create or replace function public.activity_open_state(p_activity uuid, p_date date)
+returns text language plpgsql stable security definer set search_path = public as $$
+declare a record; v_state text; v_now timestamp; v_end timestamp; v_open_at timestamp; v_back int;
 begin
-  select org_id, capacity into v_org, v_cap from class_slots where id = p_slot;
-  if v_org is null then raise exception '존재하지 않는 타임이에요'; end if;
-  if not is_member(v_org) then raise exception '단체 부원만 신청할 수 있어요'; end if;
+  select * into a from activities where id = p_activity;
+  if a.id is null then return 'ended'; end if;
+  v_now := now() at time zone 'Asia/Seoul';
+  v_end := p_date + coalesce(a.end_time, time '23:59:59');
+  if v_now > v_end then return 'ended'; end if;
+  select state into v_state from activity_opens where activity_id = p_activity and occ_date = p_date;
+  if v_state is not null then return v_state; end if;
+  if not a.repeat_weekly then return 'open'; end if;
+  if a.open_rule_day is null or a.open_rule_time is null then return 'closed'; end if;
+  v_back := ((extract(dow from p_date)::int - a.open_rule_day + 6) % 7) + 1;
+  v_open_at := (p_date - v_back) + a.open_rule_time;
+  if v_now < v_open_at then return 'before'; end if;
+  return 'open';
+end $$;
 
-  -- 같은 슬롯·주에 대한 요청을 한 줄로 세움 (마지막 한 자리 동시 클릭 문제 방지)
-  perform pg_advisory_xact_lock(hashtext(p_slot::text || p_week));
+-- ────────────── 선착순 참가 / 취소 (동시 클릭 안전) ──────────────
 
-  if exists (select 1 from signups where slot_id = p_slot and week_key = p_week and user_id = auth.uid()) then
+create or replace function public.join_activity(p_activity uuid, p_date date)
+returns text language plpgsql security definer set search_path = public as $$
+declare a record; v_count int; v_status text; v_state text;
+begin
+  select * into a from activities where id = p_activity;
+  if a.id is null then raise exception '존재하지 않는 일정이에요'; end if;
+  if not is_member(a.org_id) then raise exception '단체 부원만 신청할 수 있어요'; end if;
+  if a.repeat_weekly then
+    if extract(dow from p_date)::int <> a.day_of_week then raise exception '이 일정의 요일이 아니에요'; end if;
+  else
+    if p_date <> a.event_date then raise exception '일정 날짜가 아니에요'; end if;
+  end if;
+
+  v_state := activity_open_state(p_activity, p_date);
+  if v_state = 'ended' then raise exception '이미 끝난 일정이에요'; end if;
+  if v_state <> 'open' then raise exception '지금은 신청 기간이 아니에요'; end if;
+
+  -- 같은 일정·회차 요청을 한 줄로 세움 (마지막 한 자리 동시 클릭 문제 방지)
+  perform pg_advisory_xact_lock(hashtext(p_activity::text || p_date::text));
+
+  if exists (select 1 from activity_signups
+             where activity_id = p_activity and occ_date = p_date and user_id = auth.uid()) then
     return 'already';
   end if;
 
-  select count(*) into v_count from signups
-    where slot_id = p_slot and week_key = p_week and status = 'confirmed';
-  v_status := case when v_count < v_cap then 'confirmed' else 'waitlist' end;
+  if a.capacity is null then
+    v_status := 'confirmed';
+  else
+    select count(*) into v_count from activity_signups
+      where activity_id = p_activity and occ_date = p_date and status = 'confirmed';
+    v_status := case when v_count < a.capacity then 'confirmed' else 'waitlist' end;
+  end if;
 
-  insert into signups (org_id, slot_id, week_key, user_id, status)
-    values (v_org, p_slot, p_week, auth.uid(), v_status);
+  insert into activity_signups (org_id, activity_id, occ_date, user_id, status)
+    values (a.org_id, p_activity, p_date, auth.uid(), v_status);
   return v_status;
 end $$;
 
-create or replace function public.cancel_slot(p_slot uuid, p_week text)
+create or replace function public.leave_activity(p_activity uuid, p_date date)
 returns json language plpgsql security definer set search_path = public as $$
-declare v_org uuid; v_was text; v_promoted uuid; v_promoted_name text;
+declare a record; v_was text; v_count int; v_promoted uuid; v_promoted_name text;
 begin
-  select org_id into v_org from class_slots where id = p_slot;
-  perform pg_advisory_xact_lock(hashtext(p_slot::text || p_week));
+  select * into a from activities where id = p_activity;
+  if a.id is null then return json_build_object('cancelled', false); end if;
+  perform pg_advisory_xact_lock(hashtext(p_activity::text || p_date::text));
 
-  delete from signups
-    where slot_id = p_slot and week_key = p_week and user_id = auth.uid()
+  delete from activity_signups
+    where activity_id = p_activity and occ_date = p_date and user_id = auth.uid()
     returning status into v_was;
   if v_was is null then return json_build_object('cancelled', false); end if;
 
   -- 확정 자리가 비면 대기 1번 자동 승급
-  if v_was = 'confirmed' then
-    select s.user_id into v_promoted from signups s
-      where s.slot_id = p_slot and s.week_key = p_week and s.status = 'waitlist'
-      order by s.created_at asc limit 1;
-    if v_promoted is not null then
-      update signups set status = 'confirmed'
-        where slot_id = p_slot and week_key = p_week and user_id = v_promoted;
-      select name into v_promoted_name from profiles where id = v_promoted;
+  if v_was = 'confirmed' and a.capacity is not null then
+    select count(*) into v_count from activity_signups
+      where activity_id = p_activity and occ_date = p_date and status = 'confirmed';
+    if v_count < a.capacity then
+      select user_id into v_promoted from activity_signups
+        where activity_id = p_activity and occ_date = p_date and status = 'waitlist'
+        order by created_at asc limit 1;
+      if v_promoted is not null then
+        update activity_signups set status = 'confirmed'
+          where activity_id = p_activity and occ_date = p_date and user_id = v_promoted;
+        select name into v_promoted_name from profiles where id = v_promoted;
+      end if;
     end if;
   end if;
 
   return json_build_object('cancelled', true, 'was', v_was, 'promoted_name', v_promoted_name);
 end $$;
 
--- 정원 변경 (늘어나면 대기자 자동 승급)
-create or replace function public.set_capacity(p_slot uuid, p_week text, p_cap int)
+-- 회차 수동 오픈/마감 (p_state: 'open' | 'closed' | null=자동으로 복귀)
+create or replace function public.set_activity_open(p_activity uuid, p_date date, p_state text)
 returns void language plpgsql security definer set search_path = public as $$
-declare v_org uuid; v_count int; v_next uuid;
+declare v_org uuid;
 begin
-  select org_id into v_org from class_slots where id = p_slot;
+  select org_id into v_org from activities where id = p_activity;
   if not is_admin(v_org) then raise exception '관리자만 변경할 수 있어요'; end if;
-  if p_cap < 0 or p_cap > 50 then raise exception '정원은 0~50명 사이여야 해요'; end if;
+  if p_state is null then
+    delete from activity_opens where activity_id = p_activity and occ_date = p_date;
+  elsif p_state in ('open', 'closed') then
+    insert into activity_opens (activity_id, occ_date, state) values (p_activity, p_date, p_state)
+      on conflict (activity_id, occ_date) do update set state = p_state;
+  else
+    raise exception '잘못된 상태예요';
+  end if;
+end $$;
 
-  perform pg_advisory_xact_lock(hashtext(p_slot::text || p_week));
-  update class_slots set capacity = p_cap where id = p_slot;
-
+-- 정원이 늘었을 때 대기자 자동 승급
+create or replace function public.promote_waitlist(p_activity uuid, p_date date)
+returns void language plpgsql security definer set search_path = public as $$
+declare a record; v_count int; v_next uuid;
+begin
+  select * into a from activities where id = p_activity;
+  if not is_admin(a.org_id) then raise exception '관리자만 실행할 수 있어요'; end if;
+  perform pg_advisory_xact_lock(hashtext(p_activity::text || p_date::text));
   loop
-    select count(*) into v_count from signups
-      where slot_id = p_slot and week_key = p_week and status = 'confirmed';
-    exit when v_count >= p_cap;
-    select user_id into v_next from signups
-      where slot_id = p_slot and week_key = p_week and status = 'waitlist'
+    select count(*) into v_count from activity_signups
+      where activity_id = p_activity and occ_date = p_date and status = 'confirmed';
+    exit when a.capacity is not null and v_count >= a.capacity;
+    select user_id into v_next from activity_signups
+      where activity_id = p_activity and occ_date = p_date and status = 'waitlist'
       order by created_at asc limit 1;
     exit when v_next is null;
-    update signups set status = 'confirmed'
-      where slot_id = p_slot and week_key = p_week and user_id = v_next;
+    update activity_signups set status = 'confirmed'
+      where activity_id = p_activity and occ_date = p_date and user_id = v_next;
   end loop;
 end $$;
 
@@ -236,9 +301,9 @@ alter table public.profiles enable row level security;
 alter table public.orgs enable row level security;
 alter table public.org_codes enable row level security;
 alter table public.memberships enable row level security;
-alter table public.class_slots enable row level security;
-alter table public.signups enable row level security;
-alter table public.events enable row level security;
+alter table public.activities enable row level security;
+alter table public.activity_opens enable row level security;
+alter table public.activity_signups enable row level security;
 alter table public.posts enable row level security;
 alter table public.post_joins enable row level security;
 alter table public.keepalive enable row level security;
@@ -260,20 +325,18 @@ create policy "memberships_update" on public.memberships for update to authentic
 create policy "memberships_delete" on public.memberships for delete to authenticated
   using (user_id = auth.uid() or is_admin(org_id));
 
--- class_slots: 부원 조회, 관리자 관리
-create policy "slots_select" on public.class_slots for select to authenticated using (is_member(org_id));
-create policy "slots_insert" on public.class_slots for insert to authenticated with check (is_admin(org_id));
-create policy "slots_update" on public.class_slots for update to authenticated using (is_admin(org_id));
-create policy "slots_delete" on public.class_slots for delete to authenticated using (is_admin(org_id));
+-- activities: 부원 조회, 관리자 관리
+create policy "activities_select" on public.activities for select to authenticated using (is_member(org_id));
+create policy "activities_insert" on public.activities for insert to authenticated with check (is_admin(org_id));
+create policy "activities_update" on public.activities for update to authenticated using (is_admin(org_id));
+create policy "activities_delete" on public.activities for delete to authenticated using (is_admin(org_id));
 
--- signups: 부원 조회만 가능 (신청/취소는 함수로만 — 정원·대기열 로직 우회 방지)
-create policy "signups_select" on public.signups for select to authenticated using (is_member(org_id));
+-- activity_opens: 부원 조회 (변경은 set_activity_open 함수로만)
+create policy "activity_opens_select" on public.activity_opens for select to authenticated
+  using (exists (select 1 from activities a where a.id = activity_id and is_member(a.org_id)));
 
--- events: 부원 조회, 관리자 작성/수정/삭제
-create policy "events_select" on public.events for select to authenticated using (is_member(org_id));
-create policy "events_insert" on public.events for insert to authenticated with check (is_admin(org_id));
-create policy "events_update" on public.events for update to authenticated using (is_admin(org_id));
-create policy "events_delete" on public.events for delete to authenticated using (is_admin(org_id));
+-- activity_signups: 부원 조회만 가능 (신청/취소는 함수로만 — 정원·대기열 로직 우회 방지)
+create policy "activity_signups_select" on public.activity_signups for select to authenticated using (is_member(org_id));
 
 -- posts: 전체 공개 글은 누구나(로그인), 내부 글은 부원만
 create policy "posts_select" on public.posts for select to authenticated
@@ -294,7 +357,9 @@ create policy "post_joins_delete" on public.post_joins for delete to authenticat
 -- keepalive: 누구나 조회 가능 (GitHub Actions 핑용)
 create policy "keepalive_select" on public.keepalive for select to anon, authenticated using (true);
 
--- ────────────── 실시간 구독 (취소 시 즉시 자리 반영) ──────────────
-alter publication supabase_realtime add table public.signups;
+-- ────────────── 실시간 구독 (신청/취소·일정 변경 즉시 반영) ──────────────
+alter publication supabase_realtime add table public.activities;
+alter publication supabase_realtime add table public.activity_opens;
+alter publication supabase_realtime add table public.activity_signups;
 alter publication supabase_realtime add table public.posts;
 alter publication supabase_realtime add table public.post_joins;

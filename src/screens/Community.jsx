@@ -65,7 +65,7 @@ export default function CommunityScreen({ uid, profile, org, orgId, isAdmin }) {
       if (post.max_people && post.post_joins.length >= post.max_people) { toast("모집 인원이 가득 찼어요"); return; }
       const { error } = await supabase.from("post_joins").insert({ post_id: post.id, user_id: uid, user_name: profile?.name || "부원" });
       if (error) { toast(error.message); return; }
-      toast("참여 완료! 🙌");
+      toast(post.meet_date ? "참여 완료! [일정] 캘린더에 표시돼요 🙌" : "참여 완료! 🙌");
     }
     load();
   };
@@ -198,6 +198,9 @@ export default function CommunityScreen({ uid, profile, org, orgId, isAdmin }) {
           </div>
           <input style={inputStyle} placeholder="장소 (예: 장충 테니스장)" value={draft.location}
             onChange={(e) => setDraft({ ...draft, location: e.target.value })} />
+          <div style={{ fontSize: 12.5, color: C.sub2, margin: "0 2px 10px" }}>
+            날짜를 정하면 우리 단체 부원들의 [일정] 캘린더에 자동으로 표시돼요.
+          </div>
 
           <div style={{ fontSize: 13.5, fontWeight: 800, color: C.text, margin: "6px 2px 8px" }}>공개 범위</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>

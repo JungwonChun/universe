@@ -1,21 +1,16 @@
 import { useState, useEffect } from "react";
 import {
-  Crown, Copy, Check, Plus, Trash2, Users, BellRing, KeyRound,
-  LogOut, ChevronRight, Trophy, Building2, Minus,
+  Crown, Check, Plus, KeyRound,
+  LogOut, ChevronRight, Trophy, Building2,
 } from "lucide-react";
 import { supabase } from "../supabase.js";
-import { C, Card, Btn, Modal, SectionTitle, Avatar, inputStyle, useToast } from "../ui.jsx";
-import { DAY_NAMES, fmtTime } from "../lib/schedule.js";
+import { C, Card, SectionTitle, Avatar, useToast } from "../ui.jsx";
 
 export default function MoreScreen(ctx) {
-  const { uid, profile, org, orgId, isAdmin, slots, members, counts, cycle, reload, myOrgs, switchOrg, addOrg, reloadMemberships } = ctx;
+  const { uid, profile, org, orgId, isAdmin, members, counts, reload, myOrgs, switchOrg, addOrg, reloadMemberships } = ctx;
   const [view, setView] = useState("main"); // main | ranking
   const [code, setCode] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [showSlotModal, setShowSlotModal] = useState(false);
-  const emptySlotDraft = { day_of_week: "", start_time: "", end_time: "", capacity: "" };
-  const [slotDraft, setSlotDraft] = useState(emptySlotDraft);
-  const [busy, setBusy] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -28,48 +23,6 @@ export default function MoreScreen(ctx) {
   const copyCode = async () => {
     try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); }
     catch { toast("코드: " + code); }
-  };
-
-  const updateOpen = async (field, value) => {
-    const { error } = await supabase.from("orgs").update({ [field]: value }).eq("id", orgId);
-    if (error) toast(error.message);
-    else { toast("저장했어요"); reload(); }
-  };
-
-  const addSlot = async () => {
-    if (slotDraft.day_of_week === "") { toast("요일을 선택해주세요"); return; }
-    if (!slotDraft.start_time || !slotDraft.end_time) { toast("시작·종료 시간을 입력해주세요"); return; }
-    if (slotDraft.start_time >= slotDraft.end_time) { toast("종료 시간이 시작보다 빨라요"); return; }
-    const cap = Number(slotDraft.capacity);
-    if (slotDraft.capacity === "" || !Number.isInteger(cap) || cap < 0 || cap > 50) { toast("정원을 0~50 사이로 입력해주세요"); return; }
-    setBusy(true);
-    const { error } = await supabase.from("class_slots").insert({
-      org_id: orgId,
-      day_of_week: Number(slotDraft.day_of_week),
-      start_time: slotDraft.start_time,
-      end_time: slotDraft.end_time,
-      capacity: cap,
-    });
-    setBusy(false);
-    if (error) { toast(error.message); return; }
-    setShowSlotModal(false);
-    setSlotDraft(emptySlotDraft);
-    toast("수업 타임을 추가했어요");
-    reload();
-  };
-
-  const removeSlot = async (id) => {
-    await supabase.from("class_slots").delete().eq("id", id);
-    toast("타임을 삭제했어요");
-    reload();
-  };
-
-  const changeCap = async (slot, delta) => {
-    const next = Math.max(0, Math.min(50, slot.capacity + delta));
-    if (next === slot.capacity) return;
-    const { error } = await supabase.rpc("set_capacity", { p_slot: slot.id, p_week: cycle.weekKey, p_cap: next });
-    if (error) toast(error.message);
-    else reload();
   };
 
   const setRole = async (userId, role) => {
@@ -194,60 +147,6 @@ export default function MoreScreen(ctx) {
             </span>
           </Card>
 
-          {/* 수업 타임 관리 */}
-          <Card style={{ marginTop: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
-                <Users size={15} color={C.blue} /> 수업 타임 · 정원 관리
-              </div>
-              <button onClick={() => setShowSlotModal(true)}
-                style={{ border: "none", background: C.blueLight, color: C.blue, borderRadius: 10, padding: "6px 11px", fontSize: 12.5, fontWeight: 800, fontFamily: "inherit", cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}>
-                <Plus size={13} /> 타임 추가
-              </button>
-            </div>
-            {slots.length === 0 && (
-              <div style={{ fontSize: 13.5, color: C.sub2, padding: "10px 0" }}>
-                아직 타임이 없어요. 요일·시간·정원을 추가해주세요. (예: 월 18:00–19:00, 6명)
-              </div>
-            )}
-            {slots.map((s, i) => (
-              <div key={s.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0", borderBottom: i < slots.length - 1 ? `1px solid ${C.bg}` : "none" }}>
-                <div>
-                  <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text }}>
-                    {DAY_NAMES[s.day_of_week]}요일 {fmtTime(s.start_time)}–{fmtTime(s.end_time)}
-                  </div>
-                  <div onClick={() => removeSlot(s.id)} style={{ fontSize: 12, color: C.red, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3, marginTop: 2 }}>
-                    <Trash2 size={11} /> 삭제
-                  </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <button onClick={() => changeCap(s, -1)} style={capBtn(C.bg)}><Minus size={15} color={C.sub} /></button>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: C.text, width: 38, textAlign: "center" }}>{s.capacity}명</span>
-                  <button onClick={() => changeCap(s, 1)} style={capBtn(C.blueLight)}><Plus size={15} color={C.blue} /></button>
-                </div>
-              </div>
-            ))}
-          </Card>
-
-          {/* 자동 오픈 스케줄 */}
-          <Card style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
-              <BellRing size={15} color={C.blue} /> 자동 오픈 스케줄
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <select value={org.open_day} onChange={(e) => updateOpen("open_day", Number(e.target.value))} style={selectStyle}>
-                {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
-              </select>
-              <select value={String(org.open_time).slice(0, 5)} onChange={(e) => updateOpen("open_time", e.target.value)} style={selectStyle}>
-                {["08:00","09:00","10:00","12:00","18:00","19:00","20:00","21:00","22:00"].map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div style={{ fontSize: 12.5, color: C.sub2, marginTop: 10, lineHeight: 1.55 }}>
-              매주 이 시각에 <b>다음 주</b> 수업 신청이 자동으로 열리고, 그 주 마지막 수업이 끝나면 자동 마감돼요.
-              [신청] 탭에서 수동으로 열고 닫을 수도 있어요.
-            </div>
-          </Card>
-
           {/* 멤버 관리 */}
           <Card style={{ marginTop: 12, padding: "16px 20px 8px" }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 6 }}>부원 관리 ({members.length}명)</div>
@@ -284,43 +183,13 @@ export default function MoreScreen(ctx) {
         </div>
       </Card>
 
-      {/* 타임 추가 모달 */}
-      {showSlotModal && (
-        <Modal onClose={() => setShowSlotModal(false)}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 14 }}>수업 타임 추가</div>
-          <select value={slotDraft.day_of_week} onChange={(e) => setSlotDraft({ ...slotDraft, day_of_week: e.target.value })}
-            style={{ ...selectStyle, width: "100%", marginBottom: 10, color: slotDraft.day_of_week === "" ? C.sub2 : C.text }}>
-            <option value="" disabled>요일 선택</option>
-            {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
-          </select>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input type="time" style={{ ...inputStyle, flex: 1 }} value={slotDraft.start_time}
-              onChange={(e) => setSlotDraft({ ...slotDraft, start_time: e.target.value })} />
-            <input type="time" style={{ ...inputStyle, flex: 1 }} value={slotDraft.end_time}
-              onChange={(e) => setSlotDraft({ ...slotDraft, end_time: e.target.value })} />
-          </div>
-          <input type="number" min="0" max="50" style={inputStyle} placeholder="정원 (명)" value={slotDraft.capacity}
-            onChange={(e) => setSlotDraft({ ...slotDraft, capacity: e.target.value })} />
-          <Btn onClick={addSlot} loading={busy} style={{ marginTop: 4 }}>추가하기</Btn>
-        </Modal>
-      )}
     </div>
   );
 }
-
-const capBtn = (bg) => ({
-  width: 30, height: 30, borderRadius: 9, border: "none", background: bg,
-  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-});
 
 const miniBtn = (bg, color) => ({
   border: "none", borderRadius: 8, padding: "6px 9px", fontSize: 11.5, fontWeight: 700,
   fontFamily: "inherit", cursor: "pointer", background: bg, color,
 });
-
-const selectStyle = {
-  flex: 1, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 12px",
-  fontSize: 14.5, fontWeight: 600, fontFamily: "inherit", color: C.text, background: "#fff",
-};
 
 const rowStyle = { padding: "14px 0", borderBottom: `1px solid ${C.bg}`, cursor: "pointer" };
