@@ -92,6 +92,11 @@ cp .env.example .env   # .env 열어서 Supabase URL/키 입력
 npm run dev
 ```
 
+## Update List (예정)
+
+- [ ] 대회 운영 추가
+- [ ] Trouble Shooting 추가
+
 ## 자주 묻는 것
 
 - **무료로 어디까지 되나요?** Supabase 무료: DB 500MB, 월 활성 사용자 5만 명, 실시간 동시접속 200명 — 동아리 수십 개 규모까지 충분해요.
