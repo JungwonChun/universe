@@ -121,7 +121,7 @@ export default function BookScreen({ uid, isAdmin, org, slots, signups, cycle, r
               </div>
 
               <div style={{ height: 8, background: C.bg, borderRadius: 4, margin: "14px 0", overflow: "hidden" }}>
-                <div style={{ width: `${Math.min(100, (confirmed.length / d.capacity) * 100)}%`, height: "100%", background: isFull ? C.red : C.blue, transition: "width .4s ease" }} />
+                <div style={{ width: `${d.capacity > 0 ? Math.min(100, (confirmed.length / d.capacity) * 100) : 100}%`, height: "100%", background: isFull ? C.red : C.blue, transition: "width .4s ease" }} />
               </div>
 
               <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minHeight: 30 }}>

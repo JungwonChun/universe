@@ -212,7 +212,7 @@ declare v_org uuid; v_count int; v_next uuid;
 begin
   select org_id into v_org from class_slots where id = p_slot;
   if not is_admin(v_org) then raise exception '관리자만 변경할 수 있어요'; end if;
-  if p_cap < 1 or p_cap > 50 then raise exception '정원은 1~50명 사이여야 해요'; end if;
+  if p_cap < 0 or p_cap > 50 then raise exception '정원은 0~50명 사이여야 해요'; end if;
 
   perform pg_advisory_xact_lock(hashtext(p_slot::text || p_week));
   update class_slots set capacity = p_cap where id = p_slot;

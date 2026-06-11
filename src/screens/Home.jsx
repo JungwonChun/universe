@@ -112,7 +112,7 @@ export default function HomeScreen({ uid, profile, slots, signups, events, count
         )}
         {slots.map((d, i) => {
           const confirmed = signups.filter((s) => s.slot_id === d.id && s.status === "confirmed").length;
-          const ratio = confirmed / d.capacity;
+          const ratio = d.capacity > 0 ? confirmed / d.capacity : 1;
           const date = slotDateInWeek(cycle.weekKey, d.day_of_week);
           return (
             <div key={d.id} style={{ padding: "10px 0", borderBottom: i < slots.length - 1 ? `1px solid ${C.bg}` : "none" }}>

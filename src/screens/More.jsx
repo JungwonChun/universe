@@ -13,7 +13,8 @@ export default function MoreScreen(ctx) {
   const [code, setCode] = useState(null);
   const [copied, setCopied] = useState(false);
   const [showSlotModal, setShowSlotModal] = useState(false);
-  const [slotDraft, setSlotDraft] = useState({ day_of_week: 1, start_time: "18:00", end_time: "19:00", capacity: 6 });
+  const emptySlotDraft = { day_of_week: "", start_time: "", end_time: "", capacity: "" };
+  const [slotDraft, setSlotDraft] = useState(emptySlotDraft);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -36,12 +37,23 @@ export default function MoreScreen(ctx) {
   };
 
   const addSlot = async () => {
+    if (slotDraft.day_of_week === "") { toast("요일을 선택해주세요"); return; }
+    if (!slotDraft.start_time || !slotDraft.end_time) { toast("시작·종료 시간을 입력해주세요"); return; }
     if (slotDraft.start_time >= slotDraft.end_time) { toast("종료 시간이 시작보다 빨라요"); return; }
+    const cap = Number(slotDraft.capacity);
+    if (slotDraft.capacity === "" || !Number.isInteger(cap) || cap < 0 || cap > 50) { toast("정원을 0~50 사이로 입력해주세요"); return; }
     setBusy(true);
-    const { error } = await supabase.from("class_slots").insert({ org_id: orgId, ...slotDraft });
+    const { error } = await supabase.from("class_slots").insert({
+      org_id: orgId,
+      day_of_week: Number(slotDraft.day_of_week),
+      start_time: slotDraft.start_time,
+      end_time: slotDraft.end_time,
+      capacity: cap,
+    });
     setBusy(false);
     if (error) { toast(error.message); return; }
     setShowSlotModal(false);
+    setSlotDraft(emptySlotDraft);
     toast("수업 타임을 추가했어요");
     reload();
   };
@@ -53,7 +65,7 @@ export default function MoreScreen(ctx) {
   };
 
   const changeCap = async (slot, delta) => {
-    const next = Math.max(1, Math.min(50, slot.capacity + delta));
+    const next = Math.max(0, Math.min(50, slot.capacity + delta));
     if (next === slot.capacity) return;
     const { error } = await supabase.rpc("set_capacity", { p_slot: slot.id, p_week: cycle.weekKey, p_cap: next });
     if (error) toast(error.message);
@@ -276,8 +288,9 @@ export default function MoreScreen(ctx) {
       {showSlotModal && (
         <Modal onClose={() => setShowSlotModal(false)}>
           <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 14 }}>수업 타임 추가</div>
-          <select value={slotDraft.day_of_week} onChange={(e) => setSlotDraft({ ...slotDraft, day_of_week: Number(e.target.value) })}
-            style={{ ...selectStyle, width: "100%", marginBottom: 10 }}>
+          <select value={slotDraft.day_of_week} onChange={(e) => setSlotDraft({ ...slotDraft, day_of_week: e.target.value })}
+            style={{ ...selectStyle, width: "100%", marginBottom: 10, color: slotDraft.day_of_week === "" ? C.sub2 : C.text }}>
+            <option value="" disabled>요일 선택</option>
             {DAY_NAMES.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
           </select>
           <div style={{ display: "flex", gap: 8 }}>
@@ -286,8 +299,8 @@ export default function MoreScreen(ctx) {
             <input type="time" style={{ ...inputStyle, flex: 1 }} value={slotDraft.end_time}
               onChange={(e) => setSlotDraft({ ...slotDraft, end_time: e.target.value })} />
           </div>
-          <input type="number" min="1" max="50" style={inputStyle} placeholder="정원 (명)" value={slotDraft.capacity}
-            onChange={(e) => setSlotDraft({ ...slotDraft, capacity: Number(e.target.value) || 1 })} />
+          <input type="number" min="0" max="50" style={inputStyle} placeholder="정원 (명)" value={slotDraft.capacity}
+            onChange={(e) => setSlotDraft({ ...slotDraft, capacity: e.target.value })} />
           <Btn onClick={addSlot} loading={busy} style={{ marginTop: 4 }}>추가하기</Btn>
         </Modal>
       )}
