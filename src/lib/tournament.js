@@ -78,6 +78,24 @@ export function courtSchedule(courts, ties, matches) {
   return slots;
 }
 
+// 코트별 상태판: 'playing'(진행중) | 'upcoming'(진행예정) | 'empty'(비어있음)
+export function courtBoard(courts, ties, matches) {
+  const slots = courtSchedule(courts, ties, matches);
+  const playingTieIds = new Set(slots.filter((s) => s.tie).map((s) => s.tie.id));
+  return slots.map((s) => {
+    if (s.game) return { court: s.court, state: "playing", game: s.game, tie: s.tie };
+    const up = ties
+      .filter((t) => t.court === s.court && t.status !== "done" && !playingTieIds.has(t.id))
+      .sort((a, b) => (a.play_order || 0) - (b.play_order || 0))[0];
+    if (up) {
+      const ready = up.team_a_id && up.team_b_id;
+      const reason = !ready ? "팀 확정 대기" : (!up.a_submitted || !up.b_submitted) ? "오더 대기" : "대기";
+      return { court: s.court, state: "upcoming", tie: up, reason };
+    }
+    return { court: s.court, state: "empty" };
+  });
+}
+
 // 전체 진행률
 export function progress(matches) {
   const total = matches.length;

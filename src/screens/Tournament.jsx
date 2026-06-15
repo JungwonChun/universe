@@ -5,7 +5,7 @@ import {
 import { supabase } from "../supabase.js";
 import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast, Confetti } from "../ui.jsx";
 import {
-  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress, courtSchedule,
+  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress, courtSchedule, courtBoard,
   matchPlayers, matchScoreText, slotLabel,
 } from "../lib/tournament.js";
 
@@ -194,9 +194,9 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
         </Card>
       )}
 
-      {/* 코트별 지금 칠 경기 */}
+      {/* 코트별 경기 현황 */}
       {tour.stage !== "setup" && courts.length > 0 && (
-        <CourtBoard sched={sched} teamById={teamById} matches={matches} uid={uid} nameOf={nameOf} onTie={setSelTie} />
+        <CourtBoard board={courtBoard(courts, ties, matches)} teamById={teamById} uid={uid} nameOf={nameOf} onTie={setSelTie} />
       )}
 
       {/* 공지 */}
@@ -456,34 +456,48 @@ function NoticeSection({ posts, canPost, isAdmin, uid, tournamentId, reload, toa
   );
 }
 
-/* ───────── 코트별 "지금 칠 경기" 보드 ───────── */
-function CourtBoard({ sched, teamById, matches, uid, nameOf, onTie }) {
-  const nm = (id) => teamById[id]?.name || "미정";
+/* ───────── 코트별 경기 현황 (진행중/진행예정/비어있음) ───────── */
+const COURT_STATE = {
+  playing: { label: "진행중", bg: C.greenLight, color: C.green },
+  upcoming: { label: "진행예정", bg: C.orangeLight, color: C.orange },
+  empty: { label: "비어있음", bg: C.bg, color: C.sub2 },
+};
+function CourtBoard({ board, teamById, uid, nameOf, onTie }) {
+  const nm = (id) => (id ? teamById[id]?.name || "미정" : "미정");
   const names = (m, side) => { const ids = matchPlayers(m, side); return ids.length ? ids.map(nameOf).join("·") : "?"; };
   return (
     <>
-      <SectionTitle>지금 칠 경기 (코트별)</SectionTitle>
-      {sched.map(({ court, game, tie }) => {
+      <SectionTitle>코트별 경기 현황</SectionTitle>
+      {board.map(({ court, state, game, tie, reason }) => {
+        const st = COURT_STATE[state];
         const mine = game && [...matchPlayers(game, "a"), ...matchPlayers(game, "b")].includes(uid);
         return (
           <Card key={court} onClick={() => tie && onTie(tie.id)}
             style={{ marginBottom: 8, cursor: tie ? "pointer" : "default", border: mine ? `1.5px solid ${C.blue}` : undefined, background: mine ? C.blueLight : undefined }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: game ? 8 : 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 13.5, fontWeight: 800, color: "#7B5CF0", display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <MapPin size={13} /> {court}
               </span>
-              {game && <span style={{ fontSize: 11.5, fontWeight: 800, color: C.green }}>· {slotLabel(game)}</span>}
+              <span style={{ fontSize: 11.5, fontWeight: 800, borderRadius: 6, padding: "2px 8px", background: st.bg, color: st.color }}>{st.label}</span>
+              {state === "playing" && <span style={{ fontSize: 11.5, fontWeight: 800, color: C.green }}>· {slotLabel(game)}</span>}
               {mine && <span style={{ fontSize: 11.5, fontWeight: 800, color: C.blue }}>· 내 경기</span>}
             </div>
-            {game ? (
-              <>
+            {state === "playing" && (
+              <div style={{ marginTop: 8 }}>
                 <div style={{ fontSize: 13, color: C.sub2 }}>{tie.label} · {nm(tie.team_a_id)} vs {nm(tie.team_b_id)}</div>
                 <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginTop: 4 }}>
                   {names(game, "a")} <span style={{ color: C.sub2, fontWeight: 600 }}>vs</span> {names(game, "b")}
                 </div>
-              </>
-            ) : (
-              <div style={{ fontSize: 13, color: C.sub2 }}>대기 중 — 칠 경기가 없어요</div>
+              </div>
+            )}
+            {state === "upcoming" && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{nm(tie.team_a_id)} vs {nm(tie.team_b_id)}</div>
+                <div style={{ fontSize: 12.5, color: C.orange, marginTop: 2 }}>{tie.label} · {reason}</div>
+              </div>
+            )}
+            {state === "empty" && (
+              <div style={{ fontSize: 12.5, color: C.sub2, marginTop: 6 }}>지금 이 코트에서 진행할 경기가 없어요</div>
             )}
           </Card>
         );
