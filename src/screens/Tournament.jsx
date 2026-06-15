@@ -49,6 +49,26 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
     return () => { supabase.removeChannel(ch); };
   }, [tournamentId, reload]);
 
+  // 내 팀이 진출/우승하면 축하 이펙트 (훅은 조기 반환보다 위에 있어야 함 — Rules of Hooks)
+  const wonRef = useRef(null);
+  const [celebrate, setCelebrate] = useState(null);
+  useEffect(() => {
+    if (!tour) return;
+    const myTeamIds = new Set(teamMembers.filter((m) => m.user_id === uid).map((m) => m.team_id));
+    const won = ties.filter((t) => t.stage === "knockout" && t.status === "done" && myTeamIds.has(t.winner_team_id)).length;
+    const finalT = ties.find((t) => t.stage === "knockout" && t.label === "결승");
+    const champ = finalT?.status === "done" && myTeamIds.has(finalT.winner_team_id);
+    if (wonRef.current !== null && won > wonRef.current) {
+      setCelebrate(champ ? "🏆 우승을 축하해요!" : "🎉 다음 라운드 진출!");
+    }
+    wonRef.current = won;
+  }, [ties, teamMembers, uid, tour]);
+  useEffect(() => {
+    if (!celebrate) return;
+    const id = setTimeout(() => setCelebrate(null), 4000);
+    return () => clearTimeout(id);
+  }, [celebrate]);
+
   if (!loaded) return <div style={{ padding: 40, textAlign: "center", color: C.sub2 }}>불러오는 중...</div>;
   if (!tour) return (
     <div style={{ padding: 20 }}>
@@ -63,24 +83,6 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const canPostNotice = isAdmin || teams.some((t) => t.captain_id === uid);
   const courts = tour.courts || [];
   const prog = progress(matches);
-
-  /* 내 팀이 다음 라운드 진출/우승하면 축하 이펙트 */
-  const myTeamSet = new Set(teams.filter((t) => teamMemberIds(t.id).includes(uid)).map((t) => t.id));
-  const myWonKo = ties.filter((t) => t.stage === "knockout" && t.status === "done" && myTeamSet.has(t.winner_team_id));
-  const finalTie = ties.find((t) => t.stage === "knockout" && t.label === "결승");
-  const iChampion = finalTie?.status === "done" && myTeamSet.has(finalTie.winner_team_id);
-  const wonRef = useRef(null);
-  const [celebrate, setCelebrate] = useState(null);
-  useEffect(() => {
-    const cnt = myWonKo.length;
-    if (wonRef.current !== null && cnt > wonRef.current) {
-      setCelebrate(iChampion ? "🏆 우승을 축하해요!" : "🎉 다음 라운드 진출!");
-      const id = setTimeout(() => setCelebrate(null), 4000);
-      wonRef.current = cnt;
-      return () => clearTimeout(id);
-    }
-    wonRef.current = cnt;
-  }, [myWonKo.length, iChampion]);
 
   /* 내 차례 찾기 */
   let myTurn = null;

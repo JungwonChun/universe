@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Component } from "react";
 import { Home, MessagesSquare, CalendarDays, UserRound } from "lucide-react";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import { supabase, configured } from "./supabase.js";
@@ -18,6 +18,33 @@ const TABS = [
   { id: "community", label: "모집", icon: MessagesSquare },
   { id: "more", label: "전체", icon: UserRound },
 ];
+
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("[Universe] 화면 오류:", error, info?.componentStack); }
+  componentDidUpdate(prev) { if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null }); }
+  render() {
+    if (this.state.error) {
+      const e = this.state.error;
+      return (
+        <div style={{ padding: 20, fontFamily: FONT }}>
+          <div style={{ background: "#FDEDEE", border: "1px solid #F04452", borderRadius: 14, padding: 16 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#F04452", marginBottom: 8 }}>⚠️ 화면을 그리는 중 오류가 났어요</div>
+            <div style={{ fontSize: 13, color: "#191F28", fontWeight: 700, marginBottom: 6 }}>{String(e.message || e)}</div>
+            <pre style={{ fontSize: 11, color: "#4E5968", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 220, overflow: "auto", background: "#fff", borderRadius: 8, padding: 10, margin: 0 }}>
+              {String(e.stack || "").slice(0, 1500)}
+            </pre>
+            <button onClick={() => location.reload()} style={{ marginTop: 12, border: "none", background: "#3182F6", color: "#fff", borderRadius: 10, padding: "10px 16px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+              새로고침
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function GlobalStyle() {
   return (
@@ -246,7 +273,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
         {/* 콘텐츠 */}
         <div ref={scrollRef} style={{ flex: 1, padding: "4px 16px 24px" }}>
           {!loaded ? <Splash /> : (
-            <>
+            <ErrorBoundary resetKey={tab + ":" + tournamentId}>
               {tab === "home" && <HomeScreen {...ctx} />}
               {tab === "schedule" && <ScheduleScreen {...ctx} />}
               {tab === "community" && <CommunityScreen {...ctx} />}
@@ -255,7 +282,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
                 <TournamentScreen tournamentId={tournamentId} orgId={orgId} uid={uid}
                   isAdmin={isAdmin} members={members} onBack={() => setTab("schedule")} />
               )}
-            </>
+            </ErrorBoundary>
           )}
         </div>
 
