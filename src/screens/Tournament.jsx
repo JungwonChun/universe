@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import {
   ChevronLeft, Plus, Trash2, Trophy, Users, Pencil, Bell, MapPin, Megaphone, Send, Activity,
 } from "lucide-react";
 import { supabase } from "../supabase.js";
-import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast } from "../ui.jsx";
+import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast, Confetti } from "../ui.jsx";
 import {
   FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress,
   matchPlayers, matchScoreText, slotLabel,
@@ -64,6 +64,24 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const courts = tour.courts || [];
   const prog = progress(matches);
 
+  /* 내 팀이 다음 라운드 진출/우승하면 축하 이펙트 */
+  const myTeamSet = new Set(teams.filter((t) => teamMemberIds(t.id).includes(uid)).map((t) => t.id));
+  const myWonKo = ties.filter((t) => t.stage === "knockout" && t.status === "done" && myTeamSet.has(t.winner_team_id));
+  const finalTie = ties.find((t) => t.stage === "knockout" && t.label === "결승");
+  const iChampion = finalTie?.status === "done" && myTeamSet.has(finalTie.winner_team_id);
+  const wonRef = useRef(null);
+  const [celebrate, setCelebrate] = useState(null);
+  useEffect(() => {
+    const cnt = myWonKo.length;
+    if (wonRef.current !== null && cnt > wonRef.current) {
+      setCelebrate(iChampion ? "🏆 우승을 축하해요!" : "🎉 다음 라운드 진출!");
+      const id = setTimeout(() => setCelebrate(null), 4000);
+      wonRef.current = cnt;
+      return () => clearTimeout(id);
+    }
+    wonRef.current = cnt;
+  }, [myWonKo.length, iChampion]);
+
   /* 내 차례 찾기 */
   let myTurn = null;
   for (const tie of ties.filter((t) => t.status === "ongoing")) {
@@ -121,6 +139,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
 
   return (
     <div>
+      {celebrate && <Confetti message={celebrate} />}
       <BackBar onBack={onBack} />
 
       {/* 헤더 */}
@@ -498,44 +517,92 @@ function ResultFeed({ ties, matches, teamById, nameOf }) {
   );
 }
 
-/* ───────── 토너먼트 대진표 시각화 ───────── */
+/* ───────── 토너먼트 대진표 시각화 (연결선 + 내 팀 강조) ───────── */
+const MINE_BG = "#E5F9F1", MINE_COLOR = "#00A661"; // 내 팀 = 초록 강조
+
 function Bracket({ ties, teamById, matches, uid, teamMemberIds, onTie }) {
   const rounds = [...new Set(ties.map((t) => t.round))].sort((a, b) => a - b);
   const nm = (id) => teamById[id]?.name || "미정";
   const mine = (teamId) => teamId && teamMemberIds(teamId).includes(uid);
+
+  const wrapRef = useRef(null);
+  const tieEls = useRef({});
+  const [lines, setLines] = useState([]);
+
+  const recompute = useCallback(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const base = wrap.getBoundingClientRect();
+    const out = [];
+    ties.forEach((t) => {
+      if (!t.next_tie_id) return;
+      const from = tieEls.current[t.id], to = tieEls.current[t.next_tie_id];
+      if (!from || !to) return;
+      const fr = from.getBoundingClientRect(), tr = to.getBoundingClientRect();
+      const x1 = fr.right - base.left, y1 = fr.top + fr.height / 2 - base.top;
+      const x2 = tr.left - base.left, y2 = tr.top + tr.height / 2 - base.top;
+      const won = t.winner_team_id && mine(t.winner_team_id);
+      out.push({ x1, y1, x2, y2, won, key: t.id });
+    });
+    setLines(out);
+  }, [ties, teamById]); // eslint-disable-line
+
+  useLayoutEffect(() => { recompute(); }, [recompute, matches]);
+  useEffect(() => {
+    const on = () => recompute();
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, [recompute]);
+
   return (
-    <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>
-      {rounds.map((rd) => (
-        <div key={rd} style={{ minWidth: 150, flexShrink: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: C.sub2, textAlign: "center", marginBottom: 8 }}>
-            {ties.find((t) => t.round === rd)?.label || `${rd}R`}
+    <div style={{ overflowX: "auto", paddingBottom: 8 }}>
+      <div ref={wrapRef} style={{ position: "relative", display: "flex", gap: 28, minWidth: "min-content", padding: "0 4px" }}>
+        <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}>
+          {lines.map((l) => {
+            const mid = (l.x1 + l.x2) / 2;
+            return (
+              <path key={l.key} d={`M ${l.x1} ${l.y1} H ${mid} V ${l.y2} H ${l.x2}`}
+                fill="none" stroke={l.won ? MINE_COLOR : C.border} strokeWidth={l.won ? 2.5 : 1.5} />
+            );
+          })}
+        </svg>
+        {rounds.map((rd) => (
+          <div key={rd} style={{ minWidth: 148, flexShrink: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: C.sub2, textAlign: "center", marginBottom: 10 }}>
+              {ties.find((t) => t.round === rd)?.label || `${rd}R`}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-around", gap: 12, flex: 1 }}>
+              {ties.filter((t) => t.round === rd).sort((a, b) => (a.bracket_index || 0) - (b.bracket_index || 0)).map((tie) => {
+                const ag = tieAgg(tie, matches);
+                const winA = tie.winner_team_id === tie.team_a_id;
+                const winB = tie.winner_team_id === tie.team_b_id;
+                const row = (teamId, win, score) => {
+                  const isMine = mine(teamId);
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "7px 9px",
+                      background: isMine ? MINE_BG : win ? C.blueLight : "#fff", borderRadius: 6 }}>
+                      <span style={{ flex: 1, fontSize: 12.5, fontWeight: win || isMine ? 800 : 600,
+                        color: isMine ? MINE_COLOR : win ? C.blue : C.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {win && "🏆 "}{nm(teamId)}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: C.sub2 }}>{score}</span>
+                    </div>
+                  );
+                };
+                const involvesMine = mine(tie.team_a_id) || mine(tie.team_b_id);
+                return (
+                  <div key={tie.id} ref={(el) => (tieEls.current[tie.id] = el)} onClick={() => onTie(tie.id)}
+                    style={{ cursor: "pointer", border: `1.5px solid ${involvesMine ? MINE_COLOR : C.border}`, borderRadius: 10, overflow: "hidden", background: "#fff" }}>
+                    {row(tie.team_a_id, winA, tie.status !== "pending" ? ag.aw : "")}
+                    <div style={{ height: 1, background: C.bg }} />
+                    {row(tie.team_b_id, winB, tie.status !== "pending" ? ag.bw : "")}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-around", gap: 10, height: "100%" }}>
-            {ties.filter((t) => t.round === rd).sort((a, b) => (a.bracket_index || 0) - (b.bracket_index || 0)).map((tie) => {
-              const ag = tieAgg(tie, matches);
-              const winA = tie.winner_team_id === tie.team_a_id;
-              const winB = tie.winner_team_id === tie.team_b_id;
-              const row = (teamId, win, score) => (
-                <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 8px",
-                  background: win ? C.blueLight : "#fff", borderRadius: 6 }}>
-                  <span style={{ flex: 1, fontSize: 12.5, fontWeight: win ? 800 : 600,
-                    color: win ? C.blue : mine(teamId) ? C.blue : C.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {nm(teamId)}{mine(teamId) ? " ★" : ""}
-                  </span>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: C.sub2 }}>{score}</span>
-                </div>
-              );
-              return (
-                <div key={tie.id} onClick={() => onTie(tie.id)} style={{ cursor: "pointer", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
-                  {row(tie.team_a_id, winA, tie.status !== "pending" ? ag.aw : "")}
-                  <div style={{ height: 1, background: C.bg }} />
-                  {row(tie.team_b_id, winB, tie.status !== "pending" ? ag.bw : "")}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
@@ -552,7 +619,13 @@ function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, isAdmi
   const canB = isAdmin || isCaptainOf(tie.team_b_id);
   const tied = tie.status === "done" && !tie.winner_team_id;
 
+  // 오더 공개 규칙: 양 팀 모두 제출하면 공개. 그 전엔 자기 팀(조장)·관리자만.
+  const revealed = tie.a_submitted && tie.b_submitted;
+  const canSee = (side) => revealed || isAdmin || (side === "a" ? isCaptainOf(tie.team_a_id) : isCaptainOf(tie.team_b_id));
+  const submitted = (side) => (side === "a" ? tie.a_submitted : tie.b_submitted);
+
   const playerNames = (m, side) => {
+    if (!canSee(side)) return submitted(side) ? "오더 제출됨 (비공개)" : "오더 작성 중";
     const ids = matchPlayers(m, side);
     return ids.length ? ids.map(nameOf).join(", ") : "오더 미정";
   };
@@ -572,18 +645,42 @@ function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, isAdmi
         </div>
       )}
 
+      {/* 오더 제출 상태 */}
+      {bothReady && tie.status !== "done" && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          {["a", "b"].map((side) => {
+            const tm = side === "a" ? teamA : teamB;
+            return (
+              <div key={side} style={{
+                flex: 1, borderRadius: 10, padding: "8px 10px", fontSize: 12, fontWeight: 700, textAlign: "center",
+                background: submitted(side) ? C.greenLight : C.bg, color: submitted(side) ? C.green : C.sub2,
+              }}>
+                {tm?.name}: {submitted(side) ? "제출 완료" : "작성 중"}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {bothReady && tie.status !== "done" && !revealed && (
+        <div style={{ fontSize: 12.5, color: C.sub2, marginBottom: 12, textAlign: "center" }}>
+          🔒 양 팀이 모두 제출하면 오더가 서로에게 공개돼요
+        </div>
+      )}
+
       {/* 오더 입력 버튼 */}
       {bothReady && tie.status !== "done" && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          {canA && <button onClick={() => setOrderSide("a")} style={orderBtn}><Pencil size={12} /> {teamA.name} 오더</button>}
-          {canB && <button onClick={() => setOrderSide("b")} style={orderBtn}><Pencil size={12} /> {teamB.name} 오더</button>}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          {canA && !tie.a_submitted && <button onClick={() => setOrderSide("a")} style={orderBtn}><Pencil size={12} /> {teamA.name} 오더 내기</button>}
+          {canB && !tie.b_submitted && <button onClick={() => setOrderSide("b")} style={orderBtn}><Pencil size={12} /> {teamB.name} 오더 내기</button>}
+          {isAdmin && tie.a_submitted && <button onClick={async () => { const { error } = await supabase.rpc("unlock_order", { p_tie: tie.id, p_side: "a" }); error ? toast(error.message) : reload(); }} style={orderBtn}>{teamA.name} 오더 수정</button>}
+          {isAdmin && tie.b_submitted && <button onClick={async () => { const { error } = await supabase.rpc("unlock_order", { p_tie: tie.id, p_side: "b" }); error ? toast(error.message) : reload(); }} style={orderBtn}>{teamB.name} 오더 수정</button>}
         </div>
       )}
 
       {/* 경기 목록 */}
       {matches.map((m) => {
-        const mine = [...matchPlayers(m, "a"), ...matchPlayers(m, "b")].includes(uid);
-        const canScore = (isAdmin || canA || canB) && matchPlayers(m, "a").length && matchPlayers(m, "b").length;
+        const mine = [...(canSee("a") ? matchPlayers(m, "a") : []), ...(canSee("b") ? matchPlayers(m, "b") : [])].includes(uid);
+        const canScore = (isAdmin || canA || canB) && revealed && matchPlayers(m, "a").length && matchPlayers(m, "b").length;
         return (
           <div key={m.id} style={{
             border: `1px solid ${mine ? C.blue : C.border}`, borderRadius: 14, padding: "12px 14px", marginBottom: 8,
@@ -669,22 +766,24 @@ function OrderModal({ tie, side, team, matches, teamMemberIds, nameOf, onClose, 
   const save = async () => {
     for (const m of matches) {
       const sel = assign[m.id] || [];
-      if (sel.length && sel.length !== need(m)) { toast(`${slotLabel(m)}: ${need(m)}명을 선택해주세요`); return; }
+      if (sel.length !== need(m)) { toast(`${slotLabel(m)}: ${need(m)}명을 선택해주세요`); return; }
     }
-    const payload = matches.filter((m) => (assign[m.id] || []).length).map((m) => ({ match_id: m.id, players: assign[m.id] }));
-    if (!payload.length) { toast("출전 선수를 선택해주세요"); return; }
+    const payload = matches.map((m) => ({ match_id: m.id, players: assign[m.id] }));
     setSaving(true);
     const { error } = await supabase.rpc("submit_order", { p_tie: tie.id, p_side: side, p_assign: payload });
     setSaving(false);
     if (error) { toast(error.message); return; }
-    toast("오더를 제출했어요 ✍️");
+    toast("오더를 제출했어요 ✍️ 상대도 제출하면 공개돼요");
     reload(); onClose();
   };
 
   return (
     <Modal onClose={onClose}>
       <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>{team.name} 오더지</div>
-      <div style={{ fontSize: 13, color: C.sub2, marginBottom: 14 }}>각 경기에 출전할 선수를 선택하세요. 한 선수가 여러 경기에 나갈 수 있어요.</div>
+      <div style={{ fontSize: 13, color: C.sub2, marginBottom: 14 }}>
+        모든 경기에 출전 선수를 채워 제출하세요. 한 선수가 여러 경기에 나갈 수 있어요.
+        제출하면 상대 팀이 제출할 때까지 비공개이고, 제출 후엔 수정할 수 없어요(관리자만 가능).
+      </div>
       {matches.map((m) => (
         <div key={m.id} style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: C.blue, marginBottom: 6 }}>

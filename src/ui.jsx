@@ -96,6 +96,39 @@ export function Modal({ children, onClose }) {
   );
 }
 
+/* ───────── 축하 컨페티 ───────── */
+const CONFETTI_COLORS = ["#3182F6", "#00C471", "#FF9100", "#F04452", "#7B5CF0", "#FFD43B"];
+export function Confetti({ message }) {
+  const pieces = Array.from({ length: 80 }, (_, i) => ({
+    left: Math.random() * 100,
+    delay: Math.random() * 0.6,
+    dur: 2.2 + Math.random() * 1.6,
+    color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+    size: 7 + Math.random() * 7,
+    rot: Math.random() * 360,
+  }));
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 300, pointerEvents: "none", overflow: "hidden" }}>
+      <style>{`@keyframes confettiFall { 0%{transform:translateY(-12vh) rotate(0deg);opacity:1} 100%{transform:translateY(110vh) rotate(720deg);opacity:0.9} }
+        @keyframes celebPop { 0%{transform:scale(0.6);opacity:0} 30%{transform:scale(1.05);opacity:1} 80%{opacity:1} 100%{opacity:0} }`}</style>
+      {pieces.map((p, i) => (
+        <div key={i} style={{
+          position: "absolute", top: 0, left: `${p.left}%`, width: p.size, height: p.size * 1.4,
+          background: p.color, borderRadius: 2, transform: `rotate(${p.rot}deg)`,
+          animation: `confettiFall ${p.dur}s ${p.delay}s ease-in forwards`,
+        }} />
+      ))}
+      {message && (
+        <div style={{
+          position: "absolute", top: "38%", left: 0, right: 0, textAlign: "center",
+          fontSize: 24, fontWeight: 800, color: C.text, animation: "celebPop 2.4s ease forwards",
+          textShadow: "0 2px 12px rgba(255,255,255,0.9)", fontFamily: FONT,
+        }}>{message}</div>
+      )}
+    </div>
+  );
+}
+
 /* ───────── 토스트 ───────── */
 const ToastCtx = createContext(() => {});
 export const useToast = () => useContext(ToastCtx);
