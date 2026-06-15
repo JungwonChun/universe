@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  ChevronLeft, Plus, Trash2, Trophy, Users, Pencil, Bell,
+  ChevronLeft, Plus, Trash2, Trophy, Users, Pencil, Bell, MapPin, Megaphone, Send, Activity,
 } from "lucide-react";
 import { supabase } from "../supabase.js";
 import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast } from "../ui.jsx";
 import {
-  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch,
+  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress,
   matchPlayers, matchScoreText, slotLabel,
 } from "../lib/tournament.js";
 
@@ -15,6 +15,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const [teamMembers, setTeamMembers] = useState([]);
   const [ties, setTies] = useState([]);
   const [matches, setMatches] = useState([]);
+  const [posts, setPosts] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selTie, setSelTie] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -23,14 +24,15 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const nameOf = useCallback((id) => members.find((m) => m.user_id === id)?.profiles?.name || "?", [members]);
 
   const reload = useCallback(async () => {
-    const [{ data: t }, { data: tm }, { data: tmem }, { data: ti }, { data: mt }] = await Promise.all([
+    const [{ data: t }, { data: tm }, { data: tmem }, { data: ti }, { data: mt }, { data: po }] = await Promise.all([
       supabase.from("tournaments").select("*").eq("id", tournamentId).maybeSingle(),
       supabase.from("tournament_teams").select("*").eq("tournament_id", tournamentId).order("seed"),
       supabase.from("tournament_team_members").select("*").eq("tournament_id", tournamentId),
       supabase.from("tournament_ties").select("*").eq("tournament_id", tournamentId).order("round").order("bracket_index"),
       supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).order("order_index"),
+      supabase.from("tournament_posts").select("*").eq("tournament_id", tournamentId).order("created_at", { ascending: false }),
     ]);
-    setTour(t); setTeams(tm || []); setTeamMembers(tmem || []); setTies(ti || []); setMatches(mt || []);
+    setTour(t); setTeams(tm || []); setTeamMembers(tmem || []); setTies(ti || []); setMatches(mt || []); setPosts(po || []);
     setLoaded(true);
   }, [tournamentId]);
 
@@ -41,6 +43,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_ties", filter: `tournament_id=eq.${tournamentId}` }, reload)
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_matches", filter: `tournament_id=eq.${tournamentId}` }, reload)
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_teams", filter: `tournament_id=eq.${tournamentId}` }, reload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tournament_posts", filter: `tournament_id=eq.${tournamentId}` }, reload)
       .on("postgres_changes", { event: "*", schema: "public", table: "tournaments", filter: `id=eq.${tournamentId}` }, reload)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -57,6 +60,9 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const teamMemberIds = (teamId) => teamMembers.filter((m) => m.team_id === teamId).map((m) => m.user_id);
   const teamById = Object.fromEntries(teams.map((t) => [t.id, t]));
   const isCaptainOf = (teamId) => teamById[teamId]?.captain_id === uid;
+  const canPostNotice = isAdmin || teams.some((t) => t.captain_id === uid);
+  const courts = tour.courts || [];
+  const prog = progress(matches);
 
   /* 내 차례 찾기 */
   let myTurn = null;
@@ -130,6 +136,30 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
         </div>
       </Card>
 
+      {/* 전체 진행률 */}
+      {tour.stage !== "setup" && prog.total > 0 && (
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 800, color: C.text }}>대회 진행률</span>
+            <span style={{ fontSize: 13.5, fontWeight: 800, color: C.blue }}>{prog.pct}%</span>
+          </div>
+          <div style={{ height: 8, background: C.bg, borderRadius: 4, overflow: "hidden" }}>
+            <div style={{ width: `${prog.pct}%`, height: "100%", background: C.blue, borderRadius: 4, transition: "width .4s ease" }} />
+          </div>
+          <div style={{ fontSize: 12, color: C.sub2, marginTop: 6 }}>{prog.done} / {prog.total} 경기 완료</div>
+        </Card>
+      )}
+
+      {/* 공지 */}
+      {tour.stage !== "setup" && (
+        <NoticeSection posts={posts} canPost={canPostNotice} isAdmin={isAdmin} uid={uid} tournamentId={tournamentId} reload={reload} toast={toast} />
+      )}
+
+      {/* 코트별 현황 */}
+      {tour.stage !== "setup" && courts.length > 0 && (
+        <CourtBoard courts={courts} ties={ties} teamById={teamById} matches={matches} onTie={setSelTie} />
+      )}
+
       {/* 내 차례 배너 */}
       {myTurn && (
         <Card style={{ marginTop: 12, background: C.blue, color: "#fff", display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
@@ -178,21 +208,17 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
         </>
       )}
 
-      {/* 토너먼트 */}
+      {/* 토너먼트 대진표 (시각화) */}
       {knockoutTies.length > 0 && (
         <>
-          <SectionTitle>본선 토너먼트</SectionTitle>
-          {[...new Set(knockoutTies.map((t) => t.round))].sort((a, b) => a - b).map((rd) => (
-            <div key={rd}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: C.sub2, margin: "10px 4px 6px" }}>
-                {knockoutTies.find((t) => t.round === rd)?.label || `${rd}라운드`}
-              </div>
-              {knockoutTies.filter((t) => t.round === rd).map((tie) => (
-                <TieRow key={tie.id} tie={tie} teamById={teamById} matches={matches} onClick={() => setSelTie(tie.id)} />
-              ))}
-            </div>
-          ))}
+          <SectionTitle>본선 대진표</SectionTitle>
+          <Bracket ties={knockoutTies} teamById={teamById} matches={matches} uid={uid} teamMemberIds={teamMemberIds} onTie={setSelTie} />
         </>
+      )}
+
+      {/* 경기 결과 피드 */}
+      {tour.stage !== "setup" && (
+        <ResultFeed ties={ties} matches={matches} teamById={teamById} nameOf={nameOf} />
       )}
 
       {/* 대진 상세 */}
@@ -333,7 +359,12 @@ function TieRow({ tie, teamById, matches, onClick }) {
           {b}{winB && " 🏆"}
         </span>
       </div>
-      <div style={{ textAlign: "center", marginTop: 6 }}>
+      <div style={{ textAlign: "center", marginTop: 6, display: "flex", justifyContent: "center", gap: 6, alignItems: "center" }}>
+        {tie.court && (
+          <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 6, padding: "2px 8px", background: "#F0EBFE", color: "#7B5CF0", display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <MapPin size={10} /> {tie.court}{tie.play_order ? ` ${tie.play_order}번째` : ""}
+          </span>
+        )}
         <span style={{
           fontSize: 11, fontWeight: 700, borderRadius: 6, padding: "2px 8px",
           background: done ? C.bg : tie.status === "ongoing" ? C.greenLight : C.bg,
@@ -343,6 +374,169 @@ function TieRow({ tie, teamById, matches, onClick }) {
         </span>
       </div>
     </Card>
+  );
+}
+
+/* ───────── 대회 공지 ───────── */
+function NoticeSection({ posts, canPost, isAdmin, uid, tournamentId, reload, toast }) {
+  const [body, setBody] = useState("");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!body.trim()) { toast("내용을 입력해주세요"); return; }
+    setBusy(true);
+    const { error } = await supabase.rpc("add_tournament_notice", { p_tour: tournamentId, p_body: body.trim() });
+    setBusy(false);
+    if (error) { toast(error.message); return; }
+    setBody(""); setOpen(false); toast("공지를 올렸어요 📣"); reload();
+  };
+  const remove = async (id) => {
+    const { error } = await supabase.rpc("delete_tournament_notice", { p_post: id });
+    if (error) toast(error.message); else { toast("공지를 삭제했어요"); reload(); }
+  };
+
+  return (
+    <>
+      <SectionTitle right={canPost && (
+        <button onClick={() => setOpen(!open)} style={addBtn}><Megaphone size={13} /> 공지 쓰기</button>
+      )}>대회 공지</SectionTitle>
+      {open && (
+        <Card style={{ marginBottom: 10 }}>
+          <textarea style={{ ...inputStyle, resize: "none", marginBottom: 8 }} rows={3} placeholder="부원들에게 공지할 내용"
+            value={body} onChange={(e) => setBody(e.target.value)} />
+          <Btn onClick={submit} loading={busy}><Send size={14} style={{ marginRight: 4 }} /> 공지 올리기</Btn>
+        </Card>
+      )}
+      {posts.length === 0 ? (
+        <Card><div style={{ color: C.sub2, fontSize: 13.5, textAlign: "center", padding: 8 }}>아직 공지가 없어요</div></Card>
+      ) : posts.map((p) => (
+        <Card key={p.id} style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 14, color: C.text, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{p.body}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: C.sub2 }}>
+            <Megaphone size={12} color={C.orange} /> {p.author_name}
+            <div style={{ flex: 1 }} />
+            {(isAdmin || p.author_id === uid) && (
+              <Trash2 size={13} color={C.sub2} style={{ cursor: "pointer" }} onClick={() => remove(p.id)} />
+            )}
+          </div>
+        </Card>
+      ))}
+    </>
+  );
+}
+
+/* ───────── 코트별 현황 보드 ───────── */
+function CourtBoard({ courts, ties, teamById, matches, onTie }) {
+  const nm = (id) => teamById[id]?.name || "미정";
+  return (
+    <>
+      <SectionTitle>코트별 현황</SectionTitle>
+      {courts.map((court) => {
+        const cTies = ties.filter((t) => t.court === court).sort((a, b) => (a.play_order || 0) - (b.play_order || 0));
+        const now = cTies.find((t) => t.status === "ongoing");
+        const next = cTies.find((t) => t.status === "pending");
+        return (
+          <Card key={court} style={{ marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 800, color: "#7B5CF0", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <MapPin size={13} /> {court}
+              </span>
+              <span style={{ fontSize: 12, color: C.sub2 }}>· {cTies.filter((t) => t.status === "done").length}/{cTies.length} 완료</span>
+            </div>
+            {now ? (
+              <div onClick={() => onTie(now.id)} style={{ cursor: "pointer", background: C.greenLight, borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: C.green }}>진행 중</span>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 2 }}>{nm(now.team_a_id)} vs {nm(now.team_b_id)}</div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: C.sub2, padding: "6px 0" }}>{cTies.every((t) => t.status === "done") ? "모든 경기 종료" : "대기 중"}</div>
+            )}
+            {next && (
+              <div onClick={() => onTie(next.id)} style={{ cursor: "pointer", fontSize: 12.5, color: C.sub }}>
+                다음: {nm(next.team_a_id)} vs {nm(next.team_b_id)}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+    </>
+  );
+}
+
+/* ───────── 경기 결과 피드 ───────── */
+function ResultFeed({ ties, matches, teamById, nameOf }) {
+  const tieById = Object.fromEntries(ties.map((t) => [t.id, t]));
+  const done = matches.filter((m) => m.status === "done" && m.decided_at)
+    .sort((a, b) => String(b.decided_at).localeCompare(String(a.decided_at))).slice(0, 8);
+  if (done.length === 0) return null;
+  return (
+    <>
+      <SectionTitle>최근 경기 결과</SectionTitle>
+      <Card style={{ padding: "6px 16px" }}>
+        {done.map((m, i) => {
+          const tie = tieById[m.tie_id];
+          const aNames = matchPlayers(m, "a").map(nameOf).join(", ");
+          const bNames = matchPlayers(m, "b").map(nameOf).join(", ");
+          return (
+            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderBottom: i < done.length - 1 ? `1px solid ${C.bg}` : "none" }}>
+              <Activity size={14} color={C.sub2} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: C.sub2 }}>{tie?.label} · {slotLabel(m)}</div>
+                <div style={{ fontSize: 13.5, color: C.text, fontWeight: 600 }}>
+                  <span style={{ color: m.winner === "a" ? C.blue : C.text, fontWeight: m.winner === "a" ? 800 : 600 }}>{aNames || "?"}</span>
+                  {" vs "}
+                  <span style={{ color: m.winner === "b" ? C.blue : C.text, fontWeight: m.winner === "b" ? 800 : 600 }}>{bNames || "?"}</span>
+                </div>
+              </div>
+              <span style={{ fontSize: 13.5, fontWeight: 800, color: C.text }}>{matchScoreText(m)}</span>
+            </div>
+          );
+        })}
+      </Card>
+    </>
+  );
+}
+
+/* ───────── 토너먼트 대진표 시각화 ───────── */
+function Bracket({ ties, teamById, matches, uid, teamMemberIds, onTie }) {
+  const rounds = [...new Set(ties.map((t) => t.round))].sort((a, b) => a - b);
+  const nm = (id) => teamById[id]?.name || "미정";
+  const mine = (teamId) => teamId && teamMemberIds(teamId).includes(uid);
+  return (
+    <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>
+      {rounds.map((rd) => (
+        <div key={rd} style={{ minWidth: 150, flexShrink: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.sub2, textAlign: "center", marginBottom: 8 }}>
+            {ties.find((t) => t.round === rd)?.label || `${rd}R`}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-around", gap: 10, height: "100%" }}>
+            {ties.filter((t) => t.round === rd).sort((a, b) => (a.bracket_index || 0) - (b.bracket_index || 0)).map((tie) => {
+              const ag = tieAgg(tie, matches);
+              const winA = tie.winner_team_id === tie.team_a_id;
+              const winB = tie.winner_team_id === tie.team_b_id;
+              const row = (teamId, win, score) => (
+                <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 8px",
+                  background: win ? C.blueLight : "#fff", borderRadius: 6 }}>
+                  <span style={{ flex: 1, fontSize: 12.5, fontWeight: win ? 800 : 600,
+                    color: win ? C.blue : mine(teamId) ? C.blue : C.text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {nm(teamId)}{mine(teamId) ? " ★" : ""}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: C.sub2 }}>{score}</span>
+                </div>
+              );
+              return (
+                <div key={tie.id} onClick={() => onTie(tie.id)} style={{ cursor: "pointer", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                  {row(tie.team_a_id, winA, tie.status !== "pending" ? ag.aw : "")}
+                  <div style={{ height: 1, background: C.bg }} />
+                  {row(tie.team_b_id, winB, tie.status !== "pending" ? ag.bw : "")}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -368,7 +562,9 @@ function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, isAdmi
       <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>
         {teamA?.name || "미정"} vs {teamB?.name || "미정"}
       </div>
-      <div style={{ fontSize: 13, color: C.sub2, marginBottom: 14 }}>{tie.label}</div>
+      <div style={{ fontSize: 13, color: C.sub2, marginBottom: 14 }}>
+        {tie.label}{tie.court ? ` · ${tie.court}${tie.play_order ? ` ${tie.play_order}번째` : ""}` : ""}
+      </div>
 
       {!bothReady && (
         <div style={{ fontSize: 13.5, color: C.sub2, background: C.bg, borderRadius: 12, padding: "12px 14px", marginBottom: 12 }}>

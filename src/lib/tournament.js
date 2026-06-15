@@ -24,6 +24,25 @@ export function slotLabel(m) {
 const nextPow2 = (n) => { let p = 1; while (p < n) p *= 2; return p; };
 const log2 = (n) => Math.round(Math.log2(n));
 
+// 대진을 코트에 골고루 배정 (한 대진 = 한 코트 고정). play_order = 코트 내 진행 순서.
+function assignCourts(ties, courts) {
+  if (!courts || courts.length === 0) return;
+  const perCourt = {};
+  ties.forEach((tie, i) => {
+    const court = courts[i % courts.length];
+    tie.court = court;
+    perCourt[court] = (perCourt[court] || 0) + 1;
+    tie.play_order = perCourt[court];
+  });
+}
+
+// 전체 진행률
+export function progress(matches) {
+  const total = matches.length;
+  const done = matches.filter((m) => m.status === "done").length;
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+
 // 토너먼트 표준 시드 배치 순서 (size = 2^k)
 function seedOrder(size) {
   let seeds = [1, 2];
@@ -85,6 +104,7 @@ export function buildBracket(t, teamIds, stage = "knockout") {
     prev = next;
     round++;
   }
+  assignCourts(ties, t.courts);
   return { groups: null, ties };
 }
 
@@ -112,6 +132,7 @@ export function buildGroups(t, teams) {
           next_tmp_id: null, next_slot: null, matches: matchSkeleton(t),
         });
   });
+  assignCourts(ties, t.courts);
   return { groups, ties };
 }
 

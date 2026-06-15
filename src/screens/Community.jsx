@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Globe2, Building2, MapPin, CalendarDays, Trash2, Users } from "lucide-react";
+import { Plus, Globe2, Building2, MapPin, CalendarDays, Trash2, Users, BarChart3, X } from "lucide-react";
 import { supabase } from "../supabase.js";
 import { C, Card, Btn, Modal, Avatar, inputStyle, useToast } from "../ui.jsx";
+import PollCard from "./PollCard.jsx";
 
 const TYPE_META = {
   match: { label: "교류전", bg: "#F0EBFE", color: "#7B5CF0" },
@@ -9,11 +10,15 @@ const TYPE_META = {
   etc: { label: "기타", bg: "#F2F4F6", color: "#4E5968" },
 };
 
-export default function CommunityScreen({ uid, profile, org, orgId, isAdmin }) {
+const emptyPoll = { question: "", options: ["", ""], multi: false };
+
+export default function CommunityScreen({ uid, profile, org, orgId, isAdmin, polls = [], pollVotes = [], members = [], reload }) {
   const [posts, setPosts] = useState(null);
   const [filter, setFilter] = useState("all"); // all | mine
   const [showWrite, setShowWrite] = useState(false);
+  const [mode, setMode] = useState("post"); // post | poll
   const [draft, setDraft] = useState({ type: "play", title: "", body: "", meet_date: "", location: "", max_people: "", visibility: "org" });
+  const [poll, setPoll] = useState(emptyPoll);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -57,6 +62,22 @@ export default function CommunityScreen({ uid, profile, org, orgId, isAdmin }) {
     load();
   };
 
+  const submitPoll = async () => {
+    const opts = poll.options.map((o) => o.trim()).filter(Boolean);
+    if (!poll.question.trim()) { toast("투표 질문을 입력해주세요"); return; }
+    if (opts.length < 2) { toast("선택지를 2개 이상 입력해주세요"); return; }
+    setBusy(true);
+    const { error } = await supabase.from("polls").insert({
+      org_id: orgId, author_id: uid, author_name: profile?.name || "부원",
+      question: poll.question.trim(), options: opts, multi: poll.multi,
+    });
+    setBusy(false);
+    if (error) { toast(error.message); return; }
+    setShowWrite(false); setPoll(emptyPoll);
+    toast("투표를 올렸어요 🗳️ 홈에도 표시돼요");
+    reload && reload();
+  };
+
   const toggleJoin = async (post, joined) => {
     if (joined) {
       await supabase.from("post_joins").delete().eq("post_id", post.id).eq("user_id", uid);
@@ -90,12 +111,18 @@ export default function CommunityScreen({ uid, profile, org, orgId, isAdmin }) {
           }}>{label}</button>
         ))}
         <div style={{ flex: 1 }} />
-        <button onClick={() => setShowWrite(true)} style={{
+        <button onClick={() => { setMode("post"); setShowWrite(true); }} style={{
           border: "none", borderRadius: 20, padding: "8px 14px", fontSize: 13.5, fontWeight: 700,
           fontFamily: "inherit", cursor: "pointer", background: C.blue, color: "#fff",
           display: "flex", alignItems: "center", gap: 4,
         }}><Plus size={15} /> 글쓰기</button>
       </div>
+
+      {/* 투표 (우리 단체 전용 → '우리 단체' 필터에서만, '전체'에서도 노출) */}
+      {polls.map((pl) => (
+        <PollCard key={pl.id} poll={pl} votes={pollVotes.filter((v) => v.poll_id === pl.id)}
+          uid={uid} memberCount={members.length} isAdmin={isAdmin} reload={reload} />
+      ))}
 
       {posts === null ? (
         <Card><div style={{ textAlign: "center", color: C.sub2, fontSize: 14, padding: 12 }}>불러오는 중...</div></Card>
@@ -174,8 +201,55 @@ export default function CommunityScreen({ uid, profile, org, orgId, isAdmin }) {
       {/* 글쓰기 모달 */}
       {showWrite && (
         <Modal onClose={() => setShowWrite(false)}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 14 }}>모집 글쓰기</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            {[["post", "모집글"], ["poll", "투표"]].map(([id, label]) => (
+              <button key={id} onClick={() => setMode(id)} style={{
+                flex: 1, border: mode === id ? `2px solid ${C.blue}` : `1px solid ${C.border}`,
+                background: mode === id ? C.blueLight : "#fff", color: mode === id ? C.blue : C.sub,
+                borderRadius: 12, padding: "11px 0", fontSize: 14.5, fontWeight: 800, fontFamily: "inherit", cursor: "pointer",
+              }}>{label}</button>
+            ))}
+          </div>
 
+          {mode === "poll" ? (
+            <>
+              <input style={inputStyle} placeholder="투표 질문 (예: 회식 언제가 좋아요?)" value={poll.question}
+                onChange={(e) => setPoll({ ...poll, question: e.target.value })} />
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.sub, margin: "2px 2px 8px" }}>선택지</div>
+              {poll.options.map((opt, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                  <input style={{ ...inputStyle, marginBottom: 0, flex: 1 }} placeholder={`선택지 ${i + 1}`} value={opt}
+                    onChange={(e) => setPoll({ ...poll, options: poll.options.map((o, j) => j === i ? e.target.value : o) })} />
+                  {poll.options.length > 2 && (
+                    <button onClick={() => setPoll({ ...poll, options: poll.options.filter((_, j) => j !== i) })}
+                      style={{ border: "none", background: C.redLight, borderRadius: 10, width: 40, height: 40, cursor: "pointer", flexShrink: 0 }}>
+                      <X size={15} color={C.red} />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {poll.options.length < 8 && (
+                <button onClick={() => setPoll({ ...poll, options: [...poll.options, ""] })}
+                  style={{ border: `1px dashed ${C.border}`, background: "#fff", color: C.sub, borderRadius: 10, padding: "10px 0", width: "100%", fontSize: 13.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", marginBottom: 12 }}>
+                  + 선택지 추가
+                </button>
+              )}
+              <div onClick={() => setPoll({ ...poll, multi: !poll.multi })} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12,
+                border: `1px solid ${C.border}`, marginBottom: 14, cursor: "pointer",
+              }}>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: poll.multi ? C.text : C.sub }}>복수 선택 허용</span>
+                <div style={{ width: 44, height: 26, borderRadius: 13, background: poll.multi ? C.blue : C.border, position: "relative" }}>
+                  <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: poll.multi ? 20 : 2, transition: "left .15s ease" }} />
+                </div>
+              </div>
+              <div style={{ fontSize: 12.5, color: C.sub2, margin: "0 2px 12px", lineHeight: 1.5 }}>
+                투표는 우리 단체 부원에게 보이고, 모두의 홈 화면에도 떠요.
+              </div>
+              <Btn onClick={submitPoll} loading={busy}>투표 올리기</Btn>
+            </>
+          ) : (
+          <>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             {Object.entries(TYPE_META).map(([id, m]) => (
               <button key={id} onClick={() => setDraft({ ...draft, type: id })} style={{
@@ -221,6 +295,8 @@ export default function CommunityScreen({ uid, profile, org, orgId, isAdmin }) {
           </div>
 
           <Btn onClick={submit} loading={busy}>올리기</Btn>
+          </>
+          )}
         </Modal>
       )}
     </div>

@@ -23,7 +23,10 @@ const emptyDraft = {
   // 대회 설정
   format: "knockout", team_count: 4, players_per_team: 4,
   num_singles: 1, num_doubles: 2, num_groups: 2, advance_per_group: 2, third_place: false,
+  courts: "",
 };
+
+const parseCourts = (s) => (s || "").split(",").map((c) => c.trim()).filter(Boolean);
 
 export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens, signups, posts, tournaments, reload, setTab, schedDate, setSchedDate, openTournament }) {
   const today = new Date();
@@ -118,7 +121,7 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
         p_format: draft.format, p_team_count: Number(draft.team_count), p_ppt: Number(draft.players_per_team),
         p_singles: Number(draft.num_singles), p_doubles: Number(draft.num_doubles),
         p_groups: isGroup ? Number(draft.num_groups) : null, p_advance: Number(draft.advance_per_group),
-        p_third: draft.third_place,
+        p_third: draft.third_place, p_courts: parseCourts(draft.courts),
       });
       setBusy(null);
       if (error) { toast(error.message); return; }
@@ -436,8 +439,13 @@ function TournamentConfig({ draft, setDraft }) {
           </div>
         </div>
       )}
+
+      <div style={{ fontSize: 13, fontWeight: 800, color: C.text, margin: "4px 2px 8px" }}>사용할 코트 <span style={{ color: C.sub2, fontWeight: 600 }}>(선택)</span></div>
+      <input style={inputStyle} placeholder="코트명을 쉼표로 구분 (예: 1번코트, 2번코트)" value={draft.courts}
+        onChange={(e) => setDraft({ ...draft, courts: e.target.value })} />
+
       <div style={{ fontSize: 12.5, color: C.sub2, margin: "0 2px 14px", lineHeight: 1.55 }}>
-        만들면 대회 화면에서 팀을 편성하고 대진표를 생성해요. 각 팀 조장이 오더지를 내고 점수를 입력하면 순위가 자동 집계돼요.
+        코트를 적으면 대진을 코트에 자동 분배해요(한 대진은 한 코트에서 끝까지). 만든 뒤 대회 화면에서 팀을 편성하고 대진표를 생성하면, 각 팀 조장이 오더지를 내고 점수를 입력해 순위가 자동 집계돼요.
       </div>
     </>
   );
