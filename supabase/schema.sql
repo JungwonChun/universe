@@ -511,7 +511,7 @@ end $$;
 
 create or replace function public.seed_bracket(p_tour uuid, p_stage text, p_groups jsonb, p_ties jsonb)
 returns void language plpgsql security definer set search_path = public as $$
-declare v_org uuid; g jsonb; t jsonb; m jsonb; v_map jsonb := '{}'::jsonb; v_id uuid; v_next uuid;
+declare v_org uuid; g jsonb; t jsonb; m jsonb; v_map jsonb := '{}'::jsonb; v_id uuid;
 begin
   select org_id into v_org from tournaments where id = p_tour;
   if not is_admin(v_org) then raise exception '관리자만 대진표를 만들 수 있어요'; end if;
@@ -525,20 +525,26 @@ begin
   for t in select * from jsonb_array_elements(p_ties) loop
     v_map := v_map || jsonb_build_object(t->>'tmp_id', gen_random_uuid()::text);
   end loop;
+  -- tie 먼저 전부 삽입 (next_tie_id는 나중에 — 자기참조 FK 위반 방지)
   for t in select * from jsonb_array_elements(p_ties) loop
     v_id := (v_map->>(t->>'tmp_id'))::uuid;
-    v_next := case when nullif(t->>'next_tmp_id','') is not null then (v_map->>(t->>'next_tmp_id'))::uuid else null end;
     insert into tournament_ties (id, tournament_id, stage, group_label, round, bracket_index, label,
-      team_a_id, team_b_id, next_tie_id, next_slot, status)
+      team_a_id, team_b_id, next_slot, status)
     values (v_id, p_tour, p_stage, t->>'group_label',
       nullif(t->>'round','')::int, nullif(t->>'bracket_index','')::int, t->>'label',
       nullif(t->>'team_a_id','')::uuid, nullif(t->>'team_b_id','')::uuid,
-      v_next, nullif(t->>'next_slot',''),
+      nullif(t->>'next_slot',''),
       case when nullif(t->>'team_a_id','') is not null and nullif(t->>'team_b_id','') is not null then 'ongoing' else 'pending' end);
     for m in select * from jsonb_array_elements(coalesce(t->'matches','[]'::jsonb)) loop
       insert into tournament_matches (tournament_id, tie_id, slot_type, slot_index, order_index)
       values (p_tour, v_id, m->>'slot_type', (m->>'slot_index')::int, coalesce((m->>'order_index')::int, 0));
     end loop;
+  end loop;
+  for t in select * from jsonb_array_elements(p_ties) loop
+    if nullif(t->>'next_tmp_id','') is not null then
+      update tournament_ties set next_tie_id = (v_map->>(t->>'next_tmp_id'))::uuid
+        where id = (v_map->>(t->>'tmp_id'))::uuid;
+    end if;
   end loop;
   update tournaments set stage = p_stage where id = p_tour;
 end $$;
