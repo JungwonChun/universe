@@ -1,0 +1,166 @@
+// 대회 대진표 생성·순위·점수 헬퍼 (조 배정/매칭은 여기서 계산해 seed_bracket으로 저장)
+
+export const GROUP_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+
+export const FORMAT_LABEL = {
+  group: "조별 리그",
+  knockout: "토너먼트",
+  group_knockout: "조별 예선 + 본선 토너먼트",
+};
+
+// 한 대진(타이)의 경기 칸 구성: 단식 먼저, 그다음 복식. order_index = 출전 순서.
+export function matchSkeleton(t) {
+  const arr = [];
+  let order = 1;
+  for (let i = 1; i <= (t.num_singles || 0); i++) arr.push({ slot_type: "singles", slot_index: i, order_index: order++ });
+  for (let i = 1; i <= (t.num_doubles || 0); i++) arr.push({ slot_type: "doubles", slot_index: i, order_index: order++ });
+  return arr;
+}
+
+export function slotLabel(m) {
+  return (m.slot_type === "singles" ? "단식" : "복식") + " " + m.slot_index;
+}
+
+const nextPow2 = (n) => { let p = 1; while (p < n) p *= 2; return p; };
+const log2 = (n) => Math.round(Math.log2(n));
+
+// 토너먼트 표준 시드 배치 순서 (size = 2^k)
+function seedOrder(size) {
+  let seeds = [1, 2];
+  for (let r = 1; r < log2(size); r++) {
+    const sum = seeds.length * 2 + 1;
+    const next = [];
+    for (const s of seeds) { next.push(s); next.push(sum - s); }
+    seeds = next;
+  }
+  return seeds;
+}
+
+const roundLabelBySlots = (slots) =>
+  slots === 2 ? "결승" : slots === 4 ? "준결승" : `${slots}강`;
+
+// teamIds: 시드 순서대로의 팀 id 배열. 부전승(BYE)은 자동 처리.
+export function buildBracket(t, teamIds, stage = "knockout") {
+  const n = teamIds.length;
+  if (n < 2) return { groups: null, ties: [] };
+  const size = nextPow2(n);
+  const order = seedOrder(size);
+  // 슬롯에 팀 배치 (시드 번호가 팀 수보다 크면 BYE=null)
+  let prev = order.map((seed) => (seed <= n ? teamIds[seed - 1] : null));
+
+  const ties = [];
+  let tmp = 0;
+  const mk = () => stage[0] + tmp++;
+  const setNext = (prevTmp, nextTmp, slot) => {
+    const ti = ties.find((x) => x.tmp_id === prevTmp);
+    if (ti) { ti.next_tmp_id = nextTmp; ti.next_slot = slot; }
+  };
+
+  let round = 1;
+  while (prev.length > 1) {
+    const next = [];
+    for (let j = 0; j < prev.length / 2; j++) {
+      const a = prev[2 * j], b = prev[2 * j + 1];
+      const aOn = a !== null && a !== undefined;
+      const bOn = b !== null && b !== undefined;
+      if (aOn && bOn) {
+        const id = mk();
+        ties.push({
+          tmp_id: id, stage, group_label: null, round, bracket_index: j,
+          label: roundLabelBySlots(prev.length),
+          team_a_id: typeof a === "string" ? a : null,
+          team_b_id: typeof b === "string" ? b : null,
+          next_tmp_id: null, next_slot: null,
+          matches: matchSkeleton(t),
+        });
+        if (typeof a === "object") setNext(a.winnerOf, id, "a");
+        if (typeof b === "object") setNext(b.winnerOf, id, "b");
+        next.push({ winnerOf: id });
+      } else if (aOn || bOn) {
+        next.push(aOn ? a : b); // 부전승: 그대로 다음 라운드로
+      } else {
+        next.push(null);
+      }
+    }
+    prev = next;
+    round++;
+  }
+  return { groups: null, ties };
+}
+
+// 조별 리그: 팀을 조에 스네이크 배정 후 조 안에서 풀리그
+export function buildGroups(t, teams) {
+  const G = Math.max(1, t.num_groups || 2);
+  const buckets = Array.from({ length: G }, () => []);
+  teams.forEach((tm, i) => {
+    const row = Math.floor(i / G), col = i % G;
+    const g = row % 2 === 0 ? col : G - 1 - col; // 스네이크
+    buckets[g].push(tm);
+  });
+
+  const groups = [];
+  buckets.forEach((arr, gi) => arr.forEach((tm) => groups.push({ team_id: tm.id, group_label: GROUP_LABELS[gi] })));
+
+  const ties = [];
+  let tmp = 0;
+  buckets.forEach((arr, gi) => {
+    for (let a = 0; a < arr.length; a++)
+      for (let b = a + 1; b < arr.length; b++)
+        ties.push({
+          tmp_id: "g" + tmp++, stage: "group", group_label: GROUP_LABELS[gi],
+          label: `${GROUP_LABELS[gi]}조`, team_a_id: arr[a].id, team_b_id: arr[b].id,
+          next_tmp_id: null, next_slot: null, matches: matchSkeleton(t),
+        });
+  });
+  return { groups, ties };
+}
+
+// 대진별 매치 승수/게임 집계
+export function tieAgg(tie, matches) {
+  const ms = matches.filter((m) => m.tie_id === tie.id);
+  let aw = 0, bw = 0, ag = 0, bg = 0, done = 0;
+  for (const m of ms) {
+    if (m.status === "done") {
+      done++;
+      if (m.winner === "a") aw++; else if (m.winner === "b") bw++;
+    }
+    ag += m.games_a || 0; bg += m.games_b || 0;
+  }
+  return { total: ms.length, done, aw, bw, ag, bg };
+}
+
+// 조 순위: 승점(대진승) → 게임 득실 → 매치 승수
+export function standings(teams, ties, matches, groupLabel) {
+  const inGroup = teams.filter((t) => t.group_label === groupLabel);
+  const stat = {};
+  for (const t of inGroup) stat[t.id] = { team: t, tieW: 0, tieL: 0, mW: 0, mL: 0, gf: 0, ga: 0 };
+  const gTies = ties.filter((t) => t.stage === "group" && t.group_label === groupLabel && t.status === "done");
+  for (const tie of gTies) {
+    const ag = tieAgg(tie, matches);
+    const A = stat[tie.team_a_id], B = stat[tie.team_b_id];
+    if (!A || !B) continue;
+    A.mW += ag.aw; A.mL += ag.bw; B.mW += ag.bw; B.mL += ag.aw;
+    A.gf += ag.ag; A.ga += ag.bg; B.gf += ag.bg; B.ga += ag.ag;
+    if (tie.winner_team_id === A.team.id) { A.tieW++; B.tieL++; }
+    else if (tie.winner_team_id === B.team.id) { B.tieW++; A.tieL++; }
+  }
+  return Object.values(stat).sort((x, y) =>
+    y.tieW - x.tieW || (y.gf - y.ga) - (x.gf - x.ga) || y.mW - x.mW || x.team.seed - y.team.seed
+  );
+}
+
+// 현재 진행 중인(아직 안 끝난) 가장 빠른 순서의 경기
+export function currentMatch(tie, matches) {
+  return matches
+    .filter((m) => m.tie_id === tie.id && m.status !== "done")
+    .sort((a, b) => a.order_index - b.order_index)[0] || null;
+}
+
+export const matchPlayers = (m, side) => (side === "a" ? m.a_players : m.b_players) || [];
+
+export function matchScoreText(m) {
+  if (m.status !== "done" || m.games_a == null) return "";
+  let s = `${m.games_a}-${m.games_b}`;
+  if (m.tb_a != null) s += ` (${m.tb_a}-${m.tb_b})`;
+  return s;
+}

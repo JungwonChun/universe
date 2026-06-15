@@ -10,6 +10,7 @@ import HomeScreen from "./screens/Home.jsx";
 import ScheduleScreen from "./screens/Schedule.jsx";
 import CommunityScreen from "./screens/Community.jsx";
 import MoreScreen from "./screens/More.jsx";
+import TournamentScreen from "./screens/Tournament.jsx";
 
 const TABS = [
   { id: "home", label: "홈", icon: Home },
@@ -129,8 +130,10 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
   const [signups, setSignups] = useState([]);
   const [posts, setPosts] = useState([]);
   const [members, setMembers] = useState([]);
+  const [tournaments, setTournaments] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [schedDate, setSchedDate] = useState(() => ymd(new Date()));
+  const [tournamentId, setTournamentId] = useState(null);
   const scrollRef = useRef(null);
 
   const orgId = membership.org_id;
@@ -140,12 +143,13 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
   const { needRefresh: [needRefresh], updateServiceWorker } = useRegisterSW();
 
   const reload = useCallback(async () => {
-    const [{ data: orgRow }, { data: acts }, { data: su }, { data: po }, { data: mem }] = await Promise.all([
+    const [{ data: orgRow }, { data: acts }, { data: su }, { data: po }, { data: mem }, { data: tours }] = await Promise.all([
       supabase.from("orgs").select("*").eq("id", orgId).single(),
       supabase.from("activities").select("*").eq("org_id", orgId).order("created_at"),
       supabase.from("activity_signups").select("*, profiles(name)").eq("org_id", orgId).order("created_at"),
       supabase.from("posts").select("*, post_joins(user_id, user_name)").order("created_at", { ascending: false }).limit(200),
       supabase.from("memberships").select("user_id, role, profiles(name)").eq("org_id", orgId),
+      supabase.from("tournaments").select("*").eq("org_id", orgId).order("created_at"),
     ]);
     const ids = (acts || []).map((a) => a.id);
     const { data: ops } = ids.length
@@ -153,7 +157,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
       : { data: [] };
     if (orgRow) setOrg(orgRow);
     setActivities(acts || []); setOpens(ops || []);
-    setSignups(su || []); setPosts(po || []); setMembers(mem || []);
+    setSignups(su || []); setPosts(po || []); setMembers(mem || []); setTournaments(tours || []);
     setLoaded(true);
   }, [orgId]);
 
@@ -169,6 +173,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
       .on("postgres_changes", { event: "*", schema: "public", table: "activity_opens" }, () => reload())
       .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => reload())
       .on("postgres_changes", { event: "*", schema: "public", table: "post_joins" }, () => reload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tournaments", filter: `org_id=eq.${orgId}` }, () => reload())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [orgId, reload]);
@@ -176,13 +181,15 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
   const counts = {};
   for (const r of signups) if (r.status === "confirmed") counts[r.user_id] = (counts[r.user_id] || 0) + 1;
 
+  const openTournament = (id) => { setTournamentId(id); setTab("tournament"); };
+
   const ctx = {
-    uid, profile, org, orgId, isAdmin, activities, opens, signups, posts, members, counts,
-    reload, setTab, schedDate, setSchedDate, myOrgs, switchOrg, addOrg, reloadMemberships,
+    uid, profile, org, orgId, isAdmin, activities, opens, signups, posts, members, counts, tournaments,
+    reload, setTab, schedDate, setSchedDate, openTournament, myOrgs, switchOrg, addOrg, reloadMemberships,
   };
 
   const TITLES = {
-    home: org.name, schedule: "일정", community: "모집 게시판", more: "전체",
+    home: org.name, schedule: "일정", community: "모집 게시판", more: "전체", tournament: "대회",
   };
 
   return (
@@ -222,6 +229,10 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
               {tab === "schedule" && <ScheduleScreen {...ctx} />}
               {tab === "community" && <CommunityScreen {...ctx} />}
               {tab === "more" && <MoreScreen {...ctx} />}
+              {tab === "tournament" && tournamentId && (
+                <TournamentScreen tournamentId={tournamentId} orgId={orgId} uid={uid}
+                  isAdmin={isAdmin} members={members} onBack={() => setTab("schedule")} />
+              )}
             </>
           )}
         </div>
@@ -233,7 +244,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
         }}>
           {TABS.map((t) => {
             const Icon = t.icon;
-            const active = tab === t.id;
+            const active = tab === t.id || (tab === "tournament" && t.id === "schedule");
             return (
               <div key={t.id} onClick={() => setTab(t.id)} style={{
                 flex: 1, display: "flex", flexDirection: "column", alignItems: "center",

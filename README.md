@@ -92,9 +92,10 @@ cp .env.example .env   # .env 열어서 Supabase URL/키 입력
 npm run dev
 ```
 
-## Update List (예정)
+## Update List
 
-- [ ] 대회 운영 추가
+- [x] 대회 운영 추가 — 조별 리그 / 토너먼트 / 혼합, 팀 편성·자동 대진표, 오더지, 테니스 룰 점수 입력, 자동 순위·진출, '내 차례' 표시 *(적용하려면 `supabase/migration-v3.sql` 실행)*
+- [ ] 대회 알림 고도화 (브라우저/푸시 알림)
 - [ ] Trouble Shooting 추가
 
 ## 자주 묻는 것

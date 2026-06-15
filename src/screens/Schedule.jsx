@@ -6,10 +6,12 @@ import {
 import { supabase } from "../supabase.js";
 import { C, Card, Btn, Modal, SectionTitle, Avatar, inputStyle, useToast } from "../ui.jsx";
 import { ymd, parseDate, DAY_NAMES, fmtTime, fmtMD, fmtDateTime, occursOn, openInfo } from "../lib/schedule.js";
+import { Trophy } from "lucide-react";
 
 const TYPE_META = {
   lesson: { label: "레슨", bg: C.blueLight, color: C.blue, dot: C.blue },
   event: { label: "행사", bg: C.orangeLight, color: C.orange, dot: C.orange },
+  tournament: { label: "대회", bg: "#F0EBFE", color: "#7B5CF0", dot: "#7B5CF0" },
 };
 const POST_DOT = C.green;
 
@@ -18,9 +20,12 @@ const emptyDraft = {
   repeat: false, day_of_week: "", event_date: "",
   start_time: "", end_time: "", capacity: "",
   open_rule_day: "", open_rule_time: "",
+  // 대회 설정
+  format: "knockout", team_count: 4, players_per_team: 4,
+  num_singles: 1, num_doubles: 2, num_groups: 2, advance_per_group: 2, third_place: false,
 };
 
-export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens, signups, posts, reload, setTab, schedDate, setSchedDate }) {
+export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens, signups, posts, tournaments, reload, setTab, schedDate, setSchedDate, openTournament }) {
   const today = new Date();
   const todayKey = ymd(today);
   const selKey = schedDate || todayKey;
@@ -101,6 +106,29 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
 
   const save = async () => {
     if (!draft.title.trim()) { toast("제목을 입력해주세요"); return; }
+
+    // 대회 생성 → create_tournament 후 대회 화면으로 이동
+    if (draft.type === "tournament") {
+      if (!draft.event_date) { toast("대회 날짜를 선택해주세요"); return; }
+      if (Number(draft.num_singles) + Number(draft.num_doubles) < 1) { toast("단식·복식 합이 1경기 이상이어야 해요"); return; }
+      const isGroup = draft.format !== "knockout";
+      setBusy("save");
+      const { data, error } = await supabase.rpc("create_tournament", {
+        p_org: orgId, p_title: draft.title.trim(), p_date: draft.event_date, p_location: draft.location.trim() || null,
+        p_format: draft.format, p_team_count: Number(draft.team_count), p_ppt: Number(draft.players_per_team),
+        p_singles: Number(draft.num_singles), p_doubles: Number(draft.num_doubles),
+        p_groups: isGroup ? Number(draft.num_groups) : null, p_advance: Number(draft.advance_per_group),
+        p_third: draft.third_place,
+      });
+      setBusy(null);
+      if (error) { toast(error.message); return; }
+      setShowModal(false);
+      toast("대회를 만들었어요 🏆 팀을 편성해보세요");
+      reload();
+      if (data?.tournament_id) openTournament(data.tournament_id);
+      return;
+    }
+
     if (draft.repeat && draft.day_of_week === "") { toast("반복 요일을 선택해주세요"); return; }
     if (!draft.repeat && !draft.event_date) { toast("날짜를 선택해주세요"); return; }
     if (draft.start_time && draft.end_time && draft.start_time >= draft.end_time) { toast("종료 시간이 시작보다 빨라요"); return; }
@@ -193,6 +221,7 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
                 <div style={{ display: "flex", gap: 3, height: 6, marginTop: 1 }}>
                   {kinds.has("lesson") && <span style={dot(TYPE_META.lesson.dot)} />}
                   {kinds.has("event") && <span style={dot(TYPE_META.event.dot)} />}
+                  {kinds.has("tournament") && <span style={dot(TYPE_META.tournament.dot)} />}
                   {hasPost && <span style={dot(POST_DOT)} />}
                 </div>
               </div>
@@ -202,6 +231,7 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
         <div style={{ display: "flex", gap: 14, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.bg}`, flexWrap: "wrap" }}>
           <Legend color={TYPE_META.lesson.dot}>레슨</Legend>
           <Legend color={TYPE_META.event.dot}>행사</Legend>
+          <Legend color={TYPE_META.tournament.dot}>대회</Legend>
           <Legend color={POST_DOT}>모집</Legend>
           <Legend ring>내 참가</Legend>
         </div>
@@ -220,7 +250,10 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
         <Card><div style={{ color: C.sub2, fontSize: 14, textAlign: "center", padding: 8 }}>이 날은 일정이 없어요</div></Card>
       )}
 
-      {dayActs.map((a) => (
+      {dayActs.map((a) => a.type === "tournament" ? (
+        <TournamentLink key={a.id} a={a} tournaments={tournaments} isAdmin={isAdmin}
+          onOpen={openTournament} onRemove={removeActivity} />
+      ) : (
         <ActivityCard key={a.id} a={a} uid={uid} isAdmin={isAdmin} selDate={selDate} selKey={selKey}
           opens={opens} signups={signups} busy={busy}
           onJoin={join} onLeave={leave} onOpenState={setOpenState} onEdit={openEdit} onRemove={removeActivity} />
@@ -255,7 +288,7 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
           </div>
 
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            {Object.entries(TYPE_META).map(([id, m]) => (
+            {Object.entries(TYPE_META).filter(([id]) => !editing || id !== "tournament").map(([id, m]) => (
               <button key={id} onClick={() => setDraft({ ...draft, type: id })} style={{
                 flex: 1, border: draft.type === id ? `2px solid ${m.color}` : `1px solid ${C.border}`,
                 background: draft.type === id ? m.bg : "#fff", color: draft.type === id ? m.color : C.sub,
@@ -271,6 +304,10 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
           <input style={inputStyle} placeholder="장소 (선택)" value={draft.location}
             onChange={(e) => setDraft({ ...draft, location: e.target.value })} />
 
+          {draft.type === "tournament" ? (
+            <TournamentConfig draft={draft} setDraft={setDraft} />
+          ) : (
+          <>
           {/* 반복 토글 */}
           <div onClick={() => setDraft({ ...draft, repeat: !draft.repeat })} style={{
             display: "flex", alignItems: "center", gap: 10, padding: "13px 14px", borderRadius: 12,
@@ -334,13 +371,107 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
               단일 일정은 등록 즉시 신청을 받아요. 캘린더에서 수동으로 마감할 수 있어요.
             </div>
           )}
+          </>
+          )}
 
-          <Btn onClick={save} loading={busy === "save"}>{editing ? "저장하기" : "추가하기"}</Btn>
+          <Btn onClick={save} loading={busy === "save"}>
+            {draft.type === "tournament" ? "대회 만들기" : editing ? "저장하기" : "추가하기"}
+          </Btn>
         </Modal>
       )}
     </div>
   );
 }
+
+/* ── 대회 설정 입력 ── */
+function TournamentConfig({ draft, setDraft }) {
+  const isGroup = draft.format !== "knockout";
+  const FORMATS = [["knockout", "토너먼트"], ["group", "조별 리그"], ["group_knockout", "조별+본선"]];
+  const numField = (key, label, min = 1) => (
+    <div style={{ flex: 1 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.sub, marginBottom: 5 }}>{label}</div>
+      <input type="number" min={min} style={{ ...inputStyle, marginBottom: 0 }} value={draft[key]}
+        onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />
+    </div>
+  );
+  return (
+    <>
+      <input type="date" style={inputStyle} value={draft.event_date}
+        onChange={(e) => setDraft({ ...draft, event_date: e.target.value })} />
+
+      <div style={{ fontSize: 13, fontWeight: 800, color: C.text, margin: "4px 2px 8px" }}>대회 형식</div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {FORMATS.map(([id, label]) => (
+          <button key={id} onClick={() => setDraft({ ...draft, format: id })} style={{
+            flex: 1, border: draft.format === id ? `2px solid ${TYPE_META.tournament.color}` : `1px solid ${C.border}`,
+            background: draft.format === id ? TYPE_META.tournament.bg : "#fff",
+            color: draft.format === id ? TYPE_META.tournament.color : C.sub,
+            borderRadius: 10, padding: "10px 4px", fontSize: 12.5, fontWeight: 800, fontFamily: "inherit", cursor: "pointer",
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        {numField("team_count", "참가 팀 수", 2)}
+        {numField("players_per_team", "팀당 인원", 1)}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        {numField("num_singles", "단식 경기 수", 0)}
+        {numField("num_doubles", "복식 경기 수", 0)}
+      </div>
+      {isGroup && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          {numField("num_groups", "조 개수", 1)}
+          {draft.format === "group_knockout" && numField("advance_per_group", "조별 진출 팀", 1)}
+        </div>
+      )}
+      {draft.format !== "group" && (
+        <div onClick={() => setDraft({ ...draft, third_place: !draft.third_place })} style={{
+          display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12,
+          border: `1px solid ${C.border}`, marginBottom: 12, cursor: "pointer", background: "#fff",
+        }}>
+          <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: draft.third_place ? C.text : C.sub }}>3·4위전</span>
+          <div style={{ width: 44, height: 26, borderRadius: 13, background: draft.third_place ? C.blue : C.border, position: "relative" }}>
+            <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: draft.third_place ? 20 : 2, transition: "left .15s ease" }} />
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 12.5, color: C.sub2, margin: "0 2px 14px", lineHeight: 1.55 }}>
+        만들면 대회 화면에서 팀을 편성하고 대진표를 생성해요. 각 팀 조장이 오더지를 내고 점수를 입력하면 순위가 자동 집계돼요.
+      </div>
+    </>
+  );
+}
+
+/* ── 대회 일정 카드 ── */
+function TournamentLink({ a, tournaments, isAdmin, onOpen, onRemove }) {
+  const tour = (tournaments || []).find((t) => t.activity_id === a.id);
+  const meta = TYPE_META.tournament;
+  return (
+    <Card style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ background: meta.bg, color: meta.color, borderRadius: 8, padding: "3px 9px", fontSize: 12, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <Trophy size={11} /> 대회
+        </span>
+        {tour && <span style={{ fontSize: 12, fontWeight: 700, color: C.sub2 }}>{stageLabel(tour.stage)}</span>}
+      </div>
+      <div style={{ fontSize: 17, fontWeight: 800, color: C.text, marginTop: 10 }}>{a.title}</div>
+      {a.location && (
+        <div style={{ fontSize: 13, color: C.sub2, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <MapPin size={13} /> {a.location}
+        </div>
+      )}
+      <Btn onClick={() => tour && onOpen(tour.id)} style={{ marginTop: 12 }}>대회 보기 / 관리</Btn>
+      {isAdmin && (
+        <div onClick={() => onRemove(a)} style={{ fontSize: 12.5, color: C.red, fontWeight: 600, cursor: "pointer", textAlign: "center", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+          <Trash2 size={12} /> 대회 삭제
+        </div>
+      )}
+    </Card>
+  );
+}
+
+const stageLabel = (s) => ({ setup: "준비 중", group: "조별 예선", knockout: "본선", done: "종료" }[s] || s);
 
 /* ── 일정 카드 ── */
 function ActivityCard({ a, uid, isAdmin, selDate, selKey, opens, signups, busy, onJoin, onLeave, onOpenState, onEdit, onRemove }) {
