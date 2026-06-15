@@ -36,6 +36,48 @@ function assignCourts(ties, courts) {
   });
 }
 
+// 코트 스케줄: 코트마다 "지금 칠 경기 1개"를 배정해서 모든 코트를 가동.
+// 기본은 대진의 자기 코트에서 진행하되, 빈 코트는 가장 느린(남은 게임 많은) 대진의 게임을 끌어와 채운다.
+// 반환: [{ court, game(match|null), tie|null }] — courts 순서대로.
+export function courtSchedule(courts, ties, matches) {
+  const slots = (courts || []).map((c) => ({ court: c, game: null, tie: null }));
+  if (!slots.length) return slots;
+  // 양 팀 확정 + 양 팀 오더 제출 + 미종료 = 칠 수 있는 대진
+  const playable = ties.filter((t) => t.team_a_id && t.team_b_id && t.a_submitted && t.b_submitted && t.status !== "done");
+  const gamesOf = (id) => matches.filter((m) => m.tie_id === id).sort((a, b) => a.order_index - b.order_index);
+  const pending = {};
+  for (const t of playable) pending[t.id] = gamesOf(t.id).filter((m) => m.status !== "done");
+  const assigned = new Set();
+  const busy = new Set(); // 동시에 두 코트에 못 서는 선수
+  const playersOf = (m) => [...(m.a_players || []), ...(m.b_players || [])];
+  const free = (m) => playersOf(m).every((p) => !busy.has(p));
+  const take = (slot, t, g) => { slot.game = g; slot.tie = t; assigned.add(g.id); playersOf(g).forEach((p) => busy.add(p)); };
+
+  // 1) 자기 코트: 그 코트에 배정된 대진의 가장 빠른 미완료 게임
+  for (const slot of slots) {
+    const home = playable.filter((t) => t.court === slot.court).sort((a, b) => (a.play_order || 0) - (b.play_order || 0));
+    for (const t of home) {
+      const g = (pending[t.id] || []).find((m) => !assigned.has(m.id) && free(m));
+      if (g) { take(slot, t, g); break; }
+    }
+  }
+  // 2) 빈 코트: 남은 게임이 가장 많은(느린) 대진의 게임을 끌어와 채움 (선수 겹치면 건너뜀)
+  for (const slot of slots) {
+    if (slot.game) continue;
+    const cands = playable
+      .map((t) => ({ t, avail: (pending[t.id] || []).filter((m) => !assigned.has(m.id)) }))
+      .filter((x) => x.avail.length)
+      .sort((a, b) => b.avail.length - a.avail.length || (a.t.play_order || 0) - (b.t.play_order || 0));
+    let done = false;
+    for (const cand of cands) {
+      const g = cand.avail.find((m) => free(m));
+      if (g) { take(slot, cand.t, g); done = true; break; }
+    }
+    if (!done) break;
+  }
+  return slots;
+}
+
 // 전체 진행률
 export function progress(matches) {
   const total = matches.length;

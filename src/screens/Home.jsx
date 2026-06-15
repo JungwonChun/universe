@@ -1,7 +1,7 @@
 import { Zap, ChevronRight, Clock, CalendarDays, Trophy, Bell } from "lucide-react";
 import { C, Card, SectionTitle } from "../ui.jsx";
 import { ymd, parseDate, fmtTime, fmtMD, occursOn, nextOccDate, openInfo } from "../lib/schedule.js";
-import { progress, currentMatch, matchPlayers, slotLabel, tieAgg } from "../lib/tournament.js";
+import { progress, currentMatch, matchPlayers, slotLabel, courtSchedule } from "../lib/tournament.js";
 import PollCard from "./PollCard.jsx";
 
 export default function HomeScreen({
@@ -187,15 +187,21 @@ function TournamentWidget({ tour, uid, teams, ties, matches, teamMembers, onOpen
   const teamById = Object.fromEntries(teams.map((t) => [t.id, t]));
   const myTeamIds = new Set(teamMembers.filter((m) => m.user_id === uid).map((m) => m.team_id));
 
-  // 내 차례 / 다음 경기
+  // 내 차례 / 다음 경기 — 코트가 있으면 코트 스케줄(지금 칠 경기) 기준
+  const courts = tour.courts || [];
   let myTurn = null, myNext = null;
-  for (const tie of ties.filter((t) => t.status === "ongoing").sort((a, b) => (a.play_order || 0) - (b.play_order || 0))) {
-    const cm = currentMatch(tie, matches);
-    if (!cm) continue;
-    const inMatch = [...matchPlayers(cm, "a"), ...matchPlayers(cm, "b")].includes(uid);
-    if (inMatch && !myTurn) myTurn = { tie, match: cm };
+  if (courts.length) {
+    for (const s of courtSchedule(courts, ties, matches)) {
+      if (s.game && [...matchPlayers(s.game, "a"), ...matchPlayers(s.game, "b")].includes(uid)) {
+        myTurn = { tie: s.tie, match: s.game, court: s.court }; break;
+      }
+    }
+  } else {
+    for (const tie of ties.filter((t) => t.status === "ongoing")) {
+      const cm = currentMatch(tie, matches);
+      if (cm && [...matchPlayers(cm, "a"), ...matchPlayers(cm, "b")].includes(uid)) { myTurn = { tie, match: cm }; break; }
+    }
   }
-  // 다음 내 경기 (아직 시작 전이지만 내가 명단에 있는 경기)
   if (!myTurn) {
     for (const tie of ties.filter((t) => t.status !== "done")) {
       const cm = currentMatch(tie, matches);
@@ -231,10 +237,9 @@ function TournamentWidget({ tour, uid, teams, ties, matches, teamMembers, onOpen
         <div style={{ marginTop: 12, background: C.blue, color: "#fff", borderRadius: 12, padding: "10px 12px", display: "flex", alignItems: "center", gap: 8 }}>
           <Bell size={16} />
           <div>
-            <div style={{ fontSize: 13.5, fontWeight: 800 }}>지금 당신 차례예요!</div>
+            <div style={{ fontSize: 13.5, fontWeight: 800 }}>지금 당신 차례예요!{myTurn.court ? ` · ${myTurn.court}` : ""}</div>
             <div style={{ fontSize: 12, opacity: 0.9 }}>
               {teamById[myTurn.tie.team_a_id]?.name} vs {teamById[myTurn.tie.team_b_id]?.name} · {slotLabel(myTurn.match)}
-              {myTurn.tie.court ? ` · ${myTurn.tie.court}` : ""}
             </div>
           </div>
         </div>

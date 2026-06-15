@@ -5,7 +5,7 @@ import {
 import { supabase } from "../supabase.js";
 import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast, Confetti } from "../ui.jsx";
 import {
-  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress,
+  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress, courtSchedule,
   matchPlayers, matchScoreText, slotLabel,
 } from "../lib/tournament.js";
 
@@ -84,12 +84,21 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const courts = tour.courts || [];
   const prog = progress(matches);
 
-  /* 내 차례 찾기 */
+  /* 내 차례 찾기 — 코트가 있으면 코트 스케줄 기준, 없으면 진행 중 대진의 현재 게임 */
+  const sched = courts.length ? courtSchedule(courts, ties, matches) : [];
   let myTurn = null;
-  for (const tie of ties.filter((t) => t.status === "ongoing")) {
-    const cm = currentMatch(tie, matches);
-    if (cm && [...matchPlayers(cm, "a"), ...matchPlayers(cm, "b")].includes(uid)) {
-      myTurn = { tie, match: cm }; break;
+  if (courts.length) {
+    for (const s of sched) {
+      if (s.game && [...matchPlayers(s.game, "a"), ...matchPlayers(s.game, "b")].includes(uid)) {
+        myTurn = { tie: s.tie, match: s.game, court: s.court }; break;
+      }
+    }
+  } else {
+    for (const tie of ties.filter((t) => t.status === "ongoing")) {
+      const cm = currentMatch(tie, matches);
+      if (cm && [...matchPlayers(cm, "a"), ...matchPlayers(cm, "b")].includes(uid)) {
+        myTurn = { tie, match: cm }; break;
+      }
     }
   }
 
@@ -171,28 +180,28 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
         </Card>
       )}
 
-      {/* 공지 */}
-      {tour.stage !== "setup" && (
-        <NoticeSection posts={posts} canPost={canPostNotice} isAdmin={isAdmin} uid={uid} tournamentId={tournamentId} reload={reload} toast={toast} />
-      )}
-
-      {/* 코트별 현황 */}
-      {tour.stage !== "setup" && courts.length > 0 && (
-        <CourtBoard courts={courts} ties={ties} teamById={teamById} matches={matches} onTie={setSelTie} />
-      )}
-
       {/* 내 차례 배너 */}
       {myTurn && (
         <Card style={{ marginTop: 12, background: C.blue, color: "#fff", display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
           onClick={() => setSelTie(myTurn.tie.id)}>
           <Bell size={20} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 15, fontWeight: 800 }}>지금 당신 차례예요!</div>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>지금 당신 차례예요!{myTurn.court ? ` · ${myTurn.court}` : ""}</div>
             <div style={{ fontSize: 13, opacity: 0.9, marginTop: 2 }}>
               {teamById[myTurn.tie.team_a_id]?.name} vs {teamById[myTurn.tie.team_b_id]?.name} · {slotLabel(myTurn.match)}
             </div>
           </div>
         </Card>
+      )}
+
+      {/* 코트별 지금 칠 경기 */}
+      {tour.stage !== "setup" && courts.length > 0 && (
+        <CourtBoard sched={sched} teamById={teamById} matches={matches} uid={uid} nameOf={nameOf} onTie={setSelTie} />
+      )}
+
+      {/* 공지 */}
+      {tour.stage !== "setup" && (
+        <NoticeSection posts={posts} canPost={canPostNotice} isAdmin={isAdmin} uid={uid} tournamentId={tournamentId} reload={reload} toast={toast} />
       )}
 
       {/* setup 단계 */}
@@ -447,36 +456,34 @@ function NoticeSection({ posts, canPost, isAdmin, uid, tournamentId, reload, toa
   );
 }
 
-/* ───────── 코트별 현황 보드 ───────── */
-function CourtBoard({ courts, ties, teamById, matches, onTie }) {
+/* ───────── 코트별 "지금 칠 경기" 보드 ───────── */
+function CourtBoard({ sched, teamById, matches, uid, nameOf, onTie }) {
   const nm = (id) => teamById[id]?.name || "미정";
+  const names = (m, side) => { const ids = matchPlayers(m, side); return ids.length ? ids.map(nameOf).join("·") : "?"; };
   return (
     <>
-      <SectionTitle>코트별 현황</SectionTitle>
-      {courts.map((court) => {
-        const cTies = ties.filter((t) => t.court === court).sort((a, b) => (a.play_order || 0) - (b.play_order || 0));
-        const now = cTies.find((t) => t.status === "ongoing");
-        const next = cTies.find((t) => t.status === "pending");
+      <SectionTitle>지금 칠 경기 (코트별)</SectionTitle>
+      {sched.map(({ court, game, tie }) => {
+        const mine = game && [...matchPlayers(game, "a"), ...matchPlayers(game, "b")].includes(uid);
         return (
-          <Card key={court} style={{ marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+          <Card key={court} onClick={() => tie && onTie(tie.id)}
+            style={{ marginBottom: 8, cursor: tie ? "pointer" : "default", border: mine ? `1.5px solid ${C.blue}` : undefined, background: mine ? C.blueLight : undefined }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: game ? 8 : 0 }}>
               <span style={{ fontSize: 13.5, fontWeight: 800, color: "#7B5CF0", display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <MapPin size={13} /> {court}
               </span>
-              <span style={{ fontSize: 12, color: C.sub2 }}>· {cTies.filter((t) => t.status === "done").length}/{cTies.length} 완료</span>
+              {game && <span style={{ fontSize: 11.5, fontWeight: 800, color: C.green }}>· {slotLabel(game)}</span>}
+              {mine && <span style={{ fontSize: 11.5, fontWeight: 800, color: C.blue }}>· 내 경기</span>}
             </div>
-            {now ? (
-              <div onClick={() => onTie(now.id)} style={{ cursor: "pointer", background: C.greenLight, borderRadius: 10, padding: "8px 12px", marginBottom: 6 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: C.green }}>진행 중</span>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 2 }}>{nm(now.team_a_id)} vs {nm(now.team_b_id)}</div>
-              </div>
+            {game ? (
+              <>
+                <div style={{ fontSize: 13, color: C.sub2 }}>{tie.label} · {nm(tie.team_a_id)} vs {nm(tie.team_b_id)}</div>
+                <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, marginTop: 4 }}>
+                  {names(game, "a")} <span style={{ color: C.sub2, fontWeight: 600 }}>vs</span> {names(game, "b")}
+                </div>
+              </>
             ) : (
-              <div style={{ fontSize: 13, color: C.sub2, padding: "6px 0" }}>{cTies.every((t) => t.status === "done") ? "모든 경기 종료" : "대기 중"}</div>
-            )}
-            {next && (
-              <div onClick={() => onTie(next.id)} style={{ cursor: "pointer", fontSize: 12.5, color: C.sub }}>
-                다음: {nm(next.team_a_id)} vs {nm(next.team_b_id)}
-              </div>
+              <div style={{ fontSize: 13, color: C.sub2 }}>대기 중 — 칠 경기가 없어요</div>
             )}
           </Card>
         );
