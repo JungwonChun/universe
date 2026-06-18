@@ -43,7 +43,7 @@ export default function AuthScreen() {
       <div style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 52, marginBottom: 8 }}>🎾</div>
-          <div style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: "-0.6px" }}>Universe</div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: "-0.6px" }}>새벽테니스</div>
           <div style={{ fontSize: 14.5, color: C.sub2, marginTop: 6, fontWeight: 500 }}>
             선착순 신청부터 모집까지, 동아리 운영을 한 곳에서
           </div>
