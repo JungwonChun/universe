@@ -164,6 +164,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
   const [tourMatches, setTourMatches] = useState([]);
   const [polls, setPolls] = useState([]);
   const [pollVotes, setPollVotes] = useState([]);
+  const [tourParticipants, setTourParticipants] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [schedDate, setSchedDate] = useState(() => ymd(new Date()));
   const [tournamentId, setTournamentId] = useState(null);
@@ -188,19 +189,21 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
     const actIds = (acts || []).map((a) => a.id);
     const tourIds = (tours || []).map((t) => t.id);
     const pollIds = (pollRows || []).map((p) => p.id);
-    const [{ data: ops }, { data: tTeams }, { data: tTmem }, { data: tTies }, { data: tMatches }, { data: pVotes }] = await Promise.all([
-      supabase.from("activity_opens").select("*").in("activity_id", actIds.length ? actIds : ["00000000-0000-0000-0000-000000000000"]),
-      supabase.from("tournament_teams").select("*").in("tournament_id", tourIds.length ? tourIds : ["00000000-0000-0000-0000-000000000000"]),
-      supabase.from("tournament_team_members").select("*").in("tournament_id", tourIds.length ? tourIds : ["00000000-0000-0000-0000-000000000000"]),
-      supabase.from("tournament_ties").select("*").in("tournament_id", tourIds.length ? tourIds : ["00000000-0000-0000-0000-000000000000"]),
-      supabase.from("tournament_matches").select("*").in("tournament_id", tourIds.length ? tourIds : ["00000000-0000-0000-0000-000000000000"]),
-      supabase.from("poll_votes").select("*").in("poll_id", pollIds.length ? pollIds : ["00000000-0000-0000-0000-000000000000"]),
+    const NONE = ["00000000-0000-0000-0000-000000000000"];
+    const [{ data: ops }, { data: tTeams }, { data: tTmem }, { data: tTies }, { data: tMatches }, { data: pVotes }, { data: tParts }] = await Promise.all([
+      supabase.from("activity_opens").select("*").in("activity_id", actIds.length ? actIds : NONE),
+      supabase.from("tournament_teams").select("*").in("tournament_id", tourIds.length ? tourIds : NONE),
+      supabase.from("tournament_team_members").select("*").in("tournament_id", tourIds.length ? tourIds : NONE),
+      supabase.from("tournament_ties").select("*").in("tournament_id", tourIds.length ? tourIds : NONE),
+      supabase.from("tournament_matches").select("*").in("tournament_id", tourIds.length ? tourIds : NONE),
+      supabase.from("poll_votes").select("*").in("poll_id", pollIds.length ? pollIds : NONE),
+      supabase.from("tournament_participants").select("*").in("tournament_id", tourIds.length ? tourIds : NONE),
     ]);
     if (orgRow) setOrg(orgRow);
     setActivities(acts || []); setOpens(ops || []);
     setSignups(su || []); setPosts(po || []); setMembers(mem || []); setTournaments(tours || []);
     setTourTeams(tTeams || []); setTourTeamMembers(tTmem || []); setTourTies(tTies || []); setTourMatches(tMatches || []);
-    setPolls(pollRows || []); setPollVotes(pVotes || []);
+    setPolls(pollRows || []); setPollVotes(pVotes || []); setTourParticipants(tParts || []);
     setLoaded(true);
   }, [orgId]);
 
@@ -220,6 +223,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_ties" }, () => reload())
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_matches" }, () => reload())
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_teams" }, () => reload())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tournament_participants" }, () => reload())
       .on("postgres_changes", { event: "*", schema: "public", table: "polls", filter: `org_id=eq.${orgId}` }, () => reload())
       .on("postgres_changes", { event: "*", schema: "public", table: "poll_votes" }, () => reload())
       .subscribe();
@@ -233,7 +237,7 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
 
   const ctx = {
     uid, profile, org, orgId, isAdmin, activities, opens, signups, posts, members, counts, tournaments,
-    tourTeams, tourTeamMembers, tourTies, tourMatches, polls, pollVotes,
+    tourTeams, tourTeamMembers, tourTies, tourMatches, tourParticipants, polls, pollVotes,
     reload, setTab, schedDate, setSchedDate, openTournament, myOrgs, switchOrg, addOrg, reloadMemberships,
   };
 

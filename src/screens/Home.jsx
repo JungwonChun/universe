@@ -1,23 +1,34 @@
-import { Zap, ChevronRight, Clock, CalendarDays, Trophy, Bell } from "lucide-react";
+import { Zap, ChevronRight, Clock, CalendarDays, Trophy, Bell, Users, MapPin } from "lucide-react";
+import { supabase } from "../supabase.js";
 import { C, Card, SectionTitle } from "../ui.jsx";
 import { ymd, parseDate, fmtTime, fmtMD, occursOn, nextOccDate, openInfo } from "../lib/schedule.js";
 import { progress, currentMatch, matchPlayers, slotLabel, courtSchedule } from "../lib/tournament.js";
 import PollCard from "./PollCard.jsx";
 
+const TYPE_DOT = { lesson: C.blue, event: C.orange, tournament: "#7B5CF0" };
+const TYPE_LABEL = { lesson: "레슨", event: "행사", tournament: "대회" };
+
 export default function HomeScreen({
-  uid, profile, isAdmin, activities, opens, signups, counts, setTab, setSchedDate, reload,
-  tournaments = [], tourTeams = [], tourTeamMembers = [], tourTies = [], tourMatches = [],
+  uid, profile, isAdmin, orgId, activities, opens, signups, counts, setTab, setSchedDate, reload,
+  tournaments = [], tourTeams = [], tourTeamMembers = [], tourTies = [], tourMatches = [], tourParticipants = [],
   polls = [], pollVotes = [], members = [], openTournament,
 }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const todayKey = ymd(today);
   const myCount = counts[uid] || 0;
 
-  // 내가 팀원으로 들어간 진행 중 대회
-  const myTeamIds = new Set(tourTeamMembers.filter((m) => m.user_id === uid).map((m) => m.team_id));
-  const myTours = tournaments.filter((t) =>
-    (t.stage === "group" || t.stage === "knockout") &&
-    tourTeams.some((tm) => tm.tournament_id === t.id && myTeamIds.has(tm.id)));
+  // 진행 중/모집 중 대회 (참가 모집=setup, 진행 중=group/knockout)
+  const liveTours = tournaments.filter((t) => t.stage === "setup" || t.stage === "group" || t.stage === "knockout");
+
+  const tourJoin = async (tid, joined) => {
+    if (joined) await supabase.from("tournament_participants").delete().eq("tournament_id", tid).eq("user_id", uid);
+    else await supabase.from("tournament_participants").insert({ tournament_id: tid, user_id: uid, user_name: profile?.name || "부원" });
+    reload();
+  };
+
+  // 오늘 진행되는 일정 (레슨·행사·대회)
+  const todayActs = activities.filter((a) => occursOn(a, today))
+    .sort((x, y) => String(x.start_time || "99").localeCompare(String(y.start_time || "99")));
 
   const actById = Object.fromEntries(activities.map((a) => [a.id, a]));
   const myUpcoming = signups
@@ -59,18 +70,45 @@ export default function HomeScreen({
 
   return (
     <div>
-      {/* 진행 중 대회 — 가장 먼저, 가장 크게 */}
-      {myTours.map((t) => (
-        <TournamentWidget key={t.id} tour={t} uid={uid}
-          teams={tourTeams.filter((x) => x.tournament_id === t.id)}
-          ties={tourTies.filter((x) => x.tournament_id === t.id)}
-          matches={tourMatches.filter((x) => x.tournament_id === t.id)}
-          teamMembers={tourTeamMembers.filter((x) => x.tournament_id === t.id)}
-          onOpen={() => openTournament && openTournament(t.id)} />
-      ))}
+      {/* 진행 중/모집 중 대회 — 가장 먼저, 가장 크게 */}
+      {liveTours.map((t) => {
+        const parts = tourParticipants.filter((x) => x.tournament_id === t.id);
+        const joined = parts.some((x) => x.user_id === uid);
+        if (t.stage === "setup") {
+          return (
+            <Card key={t.id} style={{ border: "1.5px solid #7B5CF0", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Trophy size={18} color="#7B5CF0" />
+                <span style={{ flex: 1, fontSize: 15.5, fontWeight: 800, color: C.text }}>{t.title}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 800, color: "#7B5CF0", background: "#F0EBFE", borderRadius: 6, padding: "2px 8px" }}>참가 모집 중</span>
+              </div>
+              <div style={{ fontSize: 13, color: C.sub2, margin: "8px 0 12px" }}>
+                <Users size={12} style={{ verticalAlign: "-2px" }} /> {parts.length}명 신청{joined ? " · 나 신청함 ✓" : ""}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => tourJoin(t.id, joined)} style={{
+                  flex: 1, border: "none", borderRadius: 12, padding: "12px 0", fontSize: 14.5, fontWeight: 800, fontFamily: "inherit", cursor: "pointer",
+                  background: joined ? C.bg : "#7B5CF0", color: joined ? C.sub : "#fff",
+                }}>{joined ? "참가 취소" : "참가 신청하기"}</button>
+                <button onClick={() => openTournament && openTournament(t.id)} style={{
+                  flex: 1, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 0", fontSize: 14.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer", background: "#fff", color: C.sub,
+                }}>진행상황 보기</button>
+              </div>
+            </Card>
+          );
+        }
+        return (
+          <TournamentWidget key={t.id} tour={t} uid={uid}
+            teams={tourTeams.filter((x) => x.tournament_id === t.id)}
+            ties={tourTies.filter((x) => x.tournament_id === t.id)}
+            matches={tourMatches.filter((x) => x.tournament_id === t.id)}
+            teamMembers={tourTeamMembers.filter((x) => x.tournament_id === t.id)}
+            onOpen={() => openTournament && openTournament(t.id)} />
+        );
+      })}
 
       {/* 인사 카드 */}
-      <Card style={{ marginTop: myTours.length ? 12 : 0, background: `linear-gradient(135deg, ${C.blue}, ${C.blueDark})`, color: "#fff" }}>
+      <Card style={{ background: `linear-gradient(135deg, ${C.blue}, ${C.blueDark})`, color: "#fff" }}>
         <div style={{ fontSize: 14, opacity: 0.85, fontWeight: 600 }}>안녕하세요, {profile?.name}님 👋</div>
         <div style={{ fontSize: 23, fontWeight: 800, margin: "6px 0 14px", letterSpacing: "-0.5px" }}>
           지금까지 <span style={{ fontSize: 27 }}>{myCount}회</span> 참여했어요
@@ -91,6 +129,25 @@ export default function HomeScreen({
           )}
         </div>
       </Card>
+
+      {/* 오늘 일정 */}
+      <SectionTitle>오늘 일정</SectionTitle>
+      {todayActs.length === 0 ? (
+        <Card><div style={{ color: C.sub2, fontSize: 14, textAlign: "center", padding: 8 }}>오늘은 일정이 없어요</div></Card>
+      ) : todayActs.map((a) => (
+        <Card key={a.id} onClick={() => goDate(todayKey)}
+          style={{ marginBottom: 10, display: "flex", gap: 12, alignItems: "center", cursor: "pointer" }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: TYPE_DOT[a.type] || C.sub2, flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{a.title}</div>
+            <div style={{ fontSize: 13, color: C.sub2, marginTop: 2 }}>
+              {TYPE_LABEL[a.type] || "일정"}{a.start_time ? ` · ${fmtTime(a.start_time)}${a.end_time ? `–${fmtTime(a.end_time)}` : ""}` : ""}
+              {a.location ? ` · ${a.location}` : ""}
+            </div>
+          </div>
+          <ChevronRight size={18} color={C.sub2} />
+        </Card>
+      ))}
 
       {/* 진행 중인 투표 */}
       {polls.length > 0 && (
@@ -249,8 +306,13 @@ function TournamentWidget({ tour, uid, teams, ties, matches, teamMembers, onOpen
           {myNext.tie.court ? ` (${myNext.tie.court})` : ""}
         </div>
       ) : (
-        <div style={{ marginTop: 12, fontSize: 13, color: C.sub2 }}>탭해서 스코어보드·대진표를 확인하세요</div>
+        <div style={{ marginTop: 12, fontSize: 13, color: C.sub2 }}>진행상황 보기를 눌러 스코어보드·대진표를 확인하세요</div>
       )}
+
+      <button onClick={(e) => { e.stopPropagation(); onOpen(); }} style={{
+        width: "100%", marginTop: 12, border: "none", borderRadius: 12, padding: "12px 0",
+        fontSize: 14.5, fontWeight: 800, fontFamily: "inherit", cursor: "pointer", background: "#7B5CF0", color: "#fff",
+      }}>진행상황 보기</button>
     </Card>
   );
 }

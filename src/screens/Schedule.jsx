@@ -28,7 +28,7 @@ const emptyDraft = {
 
 const parseCourts = (s) => (s || "").split(",").map((c) => c.trim()).filter(Boolean);
 
-export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens, signups, posts, tournaments, reload, setTab, schedDate, setSchedDate, openTournament }) {
+export default function ScheduleScreen({ uid, profile, orgId, isAdmin, activities, opens, signups, posts, tournaments, tourParticipants = [], reload, setTab, schedDate, setSchedDate, openTournament }) {
   const today = new Date();
   const todayKey = ymd(today);
   const selKey = schedDate || todayKey;
@@ -258,6 +258,7 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
 
       {dayActs.map((a) => a.type === "tournament" ? (
         <TournamentLink key={a.id} a={a} tournaments={tournaments} isAdmin={isAdmin}
+          uid={uid} profile={profile} tourParticipants={tourParticipants} reload={reload}
           onOpen={openTournament} onRemove={removeActivity} />
       ) : (
         <ActivityCard key={a.id} a={a} uid={uid} isAdmin={isAdmin} selDate={selDate} selKey={selKey}
@@ -477,9 +478,17 @@ function TournamentConfig({ draft, setDraft }) {
 }
 
 /* ── 대회 일정 카드 ── */
-function TournamentLink({ a, tournaments, isAdmin, onOpen, onRemove }) {
+function TournamentLink({ a, tournaments, isAdmin, uid, profile, tourParticipants = [], reload, onOpen, onRemove }) {
   const tour = (tournaments || []).find((t) => t.activity_id === a.id);
   const meta = TYPE_META.tournament;
+  const parts = tour ? tourParticipants.filter((p) => p.tournament_id === tour.id) : [];
+  const joined = parts.some((p) => p.user_id === uid);
+  const canJoin = tour && tour.stage === "setup";
+  const join = async () => {
+    if (joined) await supabase.from("tournament_participants").delete().eq("tournament_id", tour.id).eq("user_id", uid);
+    else await supabase.from("tournament_participants").insert({ tournament_id: tour.id, user_id: uid, user_name: profile?.name || "부원" });
+    reload && reload();
+  };
   return (
     <Card style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -494,7 +503,17 @@ function TournamentLink({ a, tournaments, isAdmin, onOpen, onRemove }) {
           <MapPin size={13} /> {a.location}
         </div>
       )}
-      <Btn onClick={() => tour && onOpen(tour.id)} style={{ marginTop: 12 }}>대회 보기 / 관리</Btn>
+      {canJoin && (
+        <div style={{ fontSize: 12.5, color: C.sub2, marginTop: 10 }}>참가 신청 {parts.length}명{joined ? " · 나 신청함 ✓" : ""}</div>
+      )}
+      {canJoin && (
+        <Btn onClick={join} variant={joined ? "gray" : "primary"} style={{ marginTop: 8 }}>
+          {joined ? "참가 신청 취소" : "이 대회 참가 신청"}
+        </Btn>
+      )}
+      <Btn onClick={() => tour && onOpen(tour.id)} variant={canJoin ? "gray" : "primary"} style={{ marginTop: canJoin ? 8 : 12 }}>
+        {isAdmin ? "대회 보기 / 관리" : "진행상황 보기"}
+      </Btn>
       {isAdmin && (
         <div onClick={() => onRemove(a)} style={{ fontSize: 12.5, color: C.red, fontWeight: 600, cursor: "pointer", textAlign: "center", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
           <Trash2 size={12} /> 대회 삭제

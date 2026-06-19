@@ -105,6 +105,15 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
     setBusy(false);
     reload();
   };
+  /* 관리자: 부원 직접 추가/제외 */
+  const adminAddParticipant = async (m) => {
+    await supabase.from("tournament_participants").insert({ tournament_id: tournamentId, user_id: m.user_id, user_name: m.profiles?.name || "부원" });
+    reload();
+  };
+  const removeParticipant = async (userId) => {
+    await supabase.from("tournament_participants").delete().eq("tournament_id", tournamentId).eq("user_id", userId);
+    reload();
+  };
 
   /* 내 차례 찾기 — 코트가 있으면 코트 스케줄 기준, 없으면 진행 중 대진의 현재 게임 */
   const sched = courts.length ? courtSchedule(courts, ties, matches) : [];
@@ -268,10 +277,27 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
             {participants.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
                 {participants.map((p) => (
-                  <span key={p.user_id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: p.user_id === uid ? C.blueLight : C.bg, color: p.user_id === uid ? C.blue : C.sub, borderRadius: 16, padding: "4px 10px 4px 4px", fontSize: 12.5, fontWeight: 600 }}>
+                  <span key={p.user_id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: p.user_id === uid ? C.blueLight : C.bg, color: p.user_id === uid ? C.blue : C.sub, borderRadius: 16, padding: "4px 8px 4px 4px", fontSize: 12.5, fontWeight: 600 }}>
                     <Avatar name={p.user_name} size={18} />{p.user_name}
+                    {isAdmin && <span onClick={() => removeParticipant(p.user_id)} style={{ cursor: "pointer", color: C.sub2, fontWeight: 800, marginLeft: 2 }}>×</span>}
                   </span>
                 ))}
+              </div>
+            )}
+            {isAdmin && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.bg}` }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.sub, marginBottom: 6 }}>관리자: 부원 직접 추가</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {members.filter((m) => !participants.some((p) => p.user_id === m.user_id)).map((m) => (
+                    <button key={m.user_id} onClick={() => adminAddParticipant(m)} style={{
+                      border: `1px dashed ${C.border}`, background: "#fff", color: C.sub, borderRadius: 16,
+                      padding: "5px 11px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+                    }}>+ {m.profiles?.name}</button>
+                  ))}
+                  {members.every((m) => participants.some((p) => p.user_id === m.user_id)) && (
+                    <span style={{ fontSize: 12.5, color: C.sub2 }}>모든 부원이 참가 신청했어요</span>
+                  )}
+                </div>
               </div>
             )}
           </Card>

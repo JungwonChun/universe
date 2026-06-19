@@ -1006,8 +1006,10 @@ alter table public.tournament_participants enable row level security;
 create policy "tpart_select" on public.tournament_participants for select to authenticated
   using (exists (select 1 from tournaments t where t.id = tournament_id and is_member(t.org_id)));
 create policy "tpart_insert" on public.tournament_participants for insert to authenticated
-  with check (user_id = auth.uid()
-    and exists (select 1 from tournaments t where t.id = tournament_id and is_member(t.org_id)));
+  with check (
+    exists (select 1 from tournaments t where t.id = tournament_id and is_member(t.org_id))
+    and (user_id = auth.uid()
+         or exists (select 1 from tournaments t where t.id = tournament_id and is_admin(t.org_id))));
 create policy "tpart_delete" on public.tournament_participants for delete to authenticated
   using (user_id = auth.uid()
     or exists (select 1 from tournaments t where t.id = tournament_id and is_admin(t.org_id)));
