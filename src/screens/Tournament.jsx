@@ -3,7 +3,9 @@ import {
   ChevronLeft, Plus, Trash2, Trophy, Users, Pencil, Bell, MapPin, Megaphone, Send, Activity,
 } from "lucide-react";
 import { supabase } from "../supabase.js";
-import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast, Confetti } from "../ui.jsx";
+import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast, Confetti, Avatar } from "../ui.jsx";
+
+const PURPLE = "#7B5CF0";
 import {
   FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress, courtSchedule, courtBoard,
   matchPlayers, matchScoreText, slotLabel,
@@ -16,6 +18,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const [ties, setTies] = useState([]);
   const [matches, setMatches] = useState([]);
   const [posts, setPosts] = useState([]);
+  const [participants, setParticipants] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selTie, setSelTie] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -24,15 +27,16 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const nameOf = useCallback((id) => members.find((m) => m.user_id === id)?.profiles?.name || "?", [members]);
 
   const reload = useCallback(async () => {
-    const [{ data: t }, { data: tm }, { data: tmem }, { data: ti }, { data: mt }, { data: po }] = await Promise.all([
+    const [{ data: t }, { data: tm }, { data: tmem }, { data: ti }, { data: mt }, { data: po }, { data: pa }] = await Promise.all([
       supabase.from("tournaments").select("*").eq("id", tournamentId).maybeSingle(),
       supabase.from("tournament_teams").select("*").eq("tournament_id", tournamentId).order("seed"),
       supabase.from("tournament_team_members").select("*").eq("tournament_id", tournamentId),
       supabase.from("tournament_ties").select("*").eq("tournament_id", tournamentId).order("round").order("bracket_index"),
       supabase.from("tournament_matches").select("*").eq("tournament_id", tournamentId).order("order_index"),
       supabase.from("tournament_posts").select("*").eq("tournament_id", tournamentId).order("created_at", { ascending: false }),
+      supabase.from("tournament_participants").select("*").eq("tournament_id", tournamentId).order("created_at"),
     ]);
-    setTour(t); setTeams(tm || []); setTeamMembers(tmem || []); setTies(ti || []); setMatches(mt || []); setPosts(po || []);
+    setTour(t); setTeams(tm || []); setTeamMembers(tmem || []); setTies(ti || []); setMatches(mt || []); setPosts(po || []); setParticipants(pa || []);
     setLoaded(true);
   }, [tournamentId]);
 
@@ -44,6 +48,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_matches", filter: `tournament_id=eq.${tournamentId}` }, reload)
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_teams", filter: `tournament_id=eq.${tournamentId}` }, reload)
       .on("postgres_changes", { event: "*", schema: "public", table: "tournament_posts", filter: `tournament_id=eq.${tournamentId}` }, reload)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tournament_participants", filter: `tournament_id=eq.${tournamentId}` }, reload)
       .on("postgres_changes", { event: "*", schema: "public", table: "tournaments", filter: `id=eq.${tournamentId}` }, reload)
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -80,9 +85,26 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const teamMemberIds = (teamId) => teamMembers.filter((m) => m.team_id === teamId).map((m) => m.user_id);
   const teamById = Object.fromEntries(teams.map((t) => [t.id, t]));
   const isCaptainOf = (teamId) => teamById[teamId]?.captain_id === uid;
-  const canPostNotice = isAdmin || teams.some((t) => t.captain_id === uid);
+  const iAmCaptain = teams.some((t) => t.captain_id === uid);
+  const myTeam = teams.find((t) => teamMemberIds(t.id).includes(uid)) || null;
+  const canPostNotice = isAdmin || iAmCaptain;
   const courts = tour.courts || [];
   const prog = progress(matches);
+  const joined = participants.some((p) => p.user_id === uid);
+  const teamsPerGroup = tour.num_groups ? Math.round(tour.team_count / tour.num_groups) : null;
+
+  /* 대회 참가 신청 / 취소 */
+  const toggleJoin = async () => {
+    setBusy(true);
+    if (joined) {
+      await supabase.from("tournament_participants").delete().eq("tournament_id", tournamentId).eq("user_id", uid);
+    } else {
+      const myName = members.find((m) => m.user_id === uid)?.profiles?.name || "부원";
+      await supabase.from("tournament_participants").insert({ tournament_id: tournamentId, user_id: uid, user_name: myName });
+    }
+    setBusy(false);
+    reload();
+  };
 
   /* 내 차례 찾기 — 코트가 있으면 코트 스케줄 기준, 없으면 진행 중 대진의 현재 게임 */
   const sched = courts.length ? courtSchedule(courts, ties, matches) : [];
@@ -127,11 +149,11 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const genKnockout = async () => {
     const labels = [...new Set(teams.map((t) => t.group_label).filter(Boolean))].sort();
     const perGroup = labels.map((l) => standings(teams, ties, matches, l).slice(0, tour.advance_per_group));
+    // 시드 순서: 모든 조 1위 → 모든 조 2위 → ... (buildBracket의 시드 배치가 1위 vs 2위 교차로 풀어줌)
+    // 예: 2조×상위2 → [A1,B1,A2,B2] → 1조1등 vs 2조2등, 2조1등 vs 1조2등
     const ordered = [];
     for (let r = 0; r < tour.advance_per_group; r++) {
-      const row = perGroup.map((g) => g[r]).filter(Boolean).map((s) => s.team.id);
-      if (r % 2 === 1) row.reverse();
-      ordered.push(...row);
+      ordered.push(...perGroup.map((g) => g[r]).filter(Boolean).map((s) => s.team.id));
     }
     if (ordered.length < 2) { toast("본선 진출 팀이 부족해요"); return; }
     setBusy(true);
@@ -161,10 +183,38 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{tour.title}</div>
           <div style={{ fontSize: 13, color: C.sub2, marginTop: 2 }}>
-            {FORMAT_LABEL[tour.format]} · {teams.length}팀 · 단식 {tour.num_singles} 복식 {tour.num_doubles}
+            {FORMAT_LABEL[tour.format]} · {teams.length}팀{teamsPerGroup ? ` (조당 ${teamsPerGroup}팀)` : ""} · 단식 {tour.num_singles} 복식 {tour.num_doubles}
           </div>
         </div>
       </Card>
+
+      {/* 내 팀 카드 (참가자/조장 화면) */}
+      {tour.stage !== "setup" && myTeam && (
+        <Card style={{ marginTop: 12, border: `1.5px solid ${iAmCaptain ? C.orange : C.blue}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11.5, fontWeight: 800, borderRadius: 6, padding: "2px 8px", background: iAmCaptain ? C.orangeLight : C.blueLight, color: iAmCaptain ? C.orange : C.blue }}>
+              {iAmCaptain ? "👑 내가 조장" : "내 팀"}
+            </span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{myTeam.name}</span>
+            {myTeam.group_label && <span style={{ fontSize: 12.5, color: C.sub2 }}>· {myTeam.group_label}조</span>}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+            {teamMemberIds(myTeam.id).map((id) => {
+              const cap = myTeam.captain_id === id;
+              return (
+                <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: cap ? C.orangeLight : C.bg, color: cap ? C.orange : C.sub, borderRadius: 16, padding: "4px 10px 4px 4px", fontSize: 12.5, fontWeight: cap ? 800 : 600 }}>
+                  <Avatar name={nameOf(id)} size={18} />{cap ? "👑 " : ""}{nameOf(id)}{id === uid ? " (나)" : ""}
+                </span>
+              );
+            })}
+          </div>
+          {iAmCaptain && (
+            <div style={{ fontSize: 12.5, color: C.orange, marginTop: 10, fontWeight: 600 }}>
+              조장은 우리 팀 경기에서 <b>오더지 제출</b>과 <b>점수 입력</b>을 맡아요. 아래 대진을 눌러 진행하세요.
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* 전체 진행률 */}
       {tour.stage !== "setup" && prog.total > 0 && (
@@ -204,16 +254,37 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
         <NoticeSection posts={posts} canPost={canPostNotice} isAdmin={isAdmin} uid={uid} tournamentId={tournamentId} reload={reload} toast={toast} />
       )}
 
-      {/* setup 단계 */}
+      {/* setup 단계 — 참가 신청 */}
       {tour.stage === "setup" && (
-        isAdmin
-          ? <SetupView tour={tour} teams={teams} teamMemberIds={teamMemberIds} members={members}
+        <>
+          <Card style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Users size={18} color={PURPLE} />
+              <span style={{ flex: 1, fontSize: 15.5, fontWeight: 800, color: C.text }}>참가 신청 {participants.length}명</span>
+            </div>
+            <Btn onClick={toggleJoin} loading={busy} variant={joined ? "gray" : "primary"} style={{ marginTop: 12 }}>
+              {joined ? "참가 신청 취소" : "이 대회 참가 신청하기"}
+            </Btn>
+            {participants.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+                {participants.map((p) => (
+                  <span key={p.user_id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: p.user_id === uid ? C.blueLight : C.bg, color: p.user_id === uid ? C.blue : C.sub, borderRadius: 16, padding: "4px 10px 4px 4px", fontSize: 12.5, fontWeight: 600 }}>
+                    <Avatar name={p.user_name} size={18} />{p.user_name}
+                  </span>
+                ))}
+              </div>
+            )}
+          </Card>
+          {isAdmin ? (
+            <SetupView tour={tour} teams={teams} teamMemberIds={teamMemberIds} participants={participants}
               nameOf={nameOf} onGenerate={generate} busy={busy} reload={reload} toast={toast} />
-          : <Card style={{ marginTop: 12, textAlign: "center", padding: "40px 20px", color: C.sub2 }}>
-              <Users size={28} color={C.sub2} style={{ marginBottom: 10 }} />
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>대진표 준비 중</div>
-              <div style={{ fontSize: 13.5, marginTop: 4 }}>관리자가 팀 편성과 대진표를 준비하고 있어요.</div>
+          ) : (
+            <Card style={{ marginTop: 12, textAlign: "center", padding: "28px 20px", color: C.sub2 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text }}>관리자가 팀을 편성하고 있어요</div>
+              <div style={{ fontSize: 13, marginTop: 4 }}>참가 신청해두면 팀 편성 대상에 포함돼요.</div>
             </Card>
+          )}
+        </>
       )}
 
       {/* 조별 리그 */}
@@ -264,20 +335,36 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   );
 }
 
-/* ───────── 팀 편성 ───────── */
-function SetupView({ tour, teams, teamMemberIds, members, nameOf, onGenerate, busy, reload, toast }) {
+/* ───────── 팀 편성 (참가자 중에서) ───────── */
+function SetupView({ tour, teams, teamMemberIds, participants, nameOf, onGenerate, busy, reload, toast }) {
   const initial = teams.length
     ? teams.map((t) => ({ name: t.name, captain_id: t.captain_id || "", member_ids: teamMemberIds(t.id) }))
     : Array.from({ length: tour.team_count }, (_, i) => ({ name: `팀 ${i + 1}`, captain_id: "", member_ids: [] }));
   const [draft, setDraft] = useState(initial);
   const [saving, setSaving] = useState(false);
+  const nameById = Object.fromEntries(participants.map((p) => [p.user_id, p.user_name]));
 
   const upd = (i, patch) => setDraft(draft.map((d, j) => (j === i ? { ...d, ...patch } : d)));
-  const toggleMember = (i, uid) => {
-    const d = draft[i];
-    const has = d.member_ids.includes(uid);
-    const member_ids = has ? d.member_ids.filter((x) => x !== uid) : [...d.member_ids, uid];
-    upd(i, { member_ids, captain_id: has && d.captain_id === uid ? "" : d.captain_id });
+  // 한 선수는 한 팀에만 — 다른 팀에 있으면 빼고 이 팀에 추가
+  const assignTo = (teamIdx, pid) => {
+    setDraft(draft.map((d, j) => {
+      if (j === teamIdx) {
+        const has = d.member_ids.includes(pid);
+        return has
+          ? { ...d, member_ids: d.member_ids.filter((x) => x !== pid), captain_id: d.captain_id === pid ? "" : d.captain_id }
+          : { ...d, member_ids: [...d.member_ids, pid] };
+      }
+      return { ...d, member_ids: d.member_ids.filter((x) => x !== pid), captain_id: d.captain_id === pid ? "" : d.captain_id };
+    }));
+  };
+  const teamOf = (pid) => draft.findIndex((d) => d.member_ids.includes(pid));
+
+  const autoFill = () => {
+    const ids = participants.map((p) => p.user_id);
+    const next = draft.map((d) => ({ ...d, member_ids: [], captain_id: "" }));
+    ids.forEach((pid, k) => { if (next.length) next[k % next.length].member_ids.push(pid); });
+    next.forEach((d) => { if (d.member_ids.length) d.captain_id = d.member_ids[0]; });
+    setDraft(next);
   };
 
   const save = async () => {
@@ -290,12 +377,23 @@ function SetupView({ tour, teams, teamMemberIds, members, nameOf, onGenerate, bu
     reload();
   };
 
+  const assignedCount = new Set(draft.flatMap((d) => d.member_ids)).size;
+
   return (
     <>
       <SectionTitle right={
         <button onClick={() => setDraft([...draft, { name: `팀 ${draft.length + 1}`, captain_id: "", member_ids: [] }])}
           style={addBtn}><Plus size={13} /> 팀 추가</button>
       }>팀 편성 ({draft.length}팀)</SectionTitle>
+
+      {participants.length === 0 ? (
+        <Card><div style={{ color: C.sub2, fontSize: 13.5, textAlign: "center", padding: 12 }}>아직 참가 신청한 부원이 없어요. 신청을 받은 뒤 팀을 편성하세요.</div></Card>
+      ) : (
+        <Card style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ flex: 1, fontSize: 13, color: C.sub }}>참가자 {participants.length}명 중 {assignedCount}명 배정됨</span>
+          <button onClick={autoFill} style={addBtn}>참가자 균등 배정</button>
+        </Card>
+      )}
 
       {draft.map((d, i) => (
         <Card key={i} style={{ marginBottom: 10 }}>
@@ -306,26 +404,30 @@ function SetupView({ tour, teams, teamMemberIds, members, nameOf, onGenerate, bu
               <Trash2 size={15} color={C.red} />
             </button>
           </div>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: C.sub, marginBottom: 6 }}>팀원 선택 ({d.member_ids.length}명)</div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: C.sub, marginBottom: 6 }}>팀원 ({d.member_ids.length}명) · 탭해서 추가/제외</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {members.map((m) => {
-              const on = d.member_ids.includes(m.user_id);
+            {participants.map((p) => {
+              const on = d.member_ids.includes(p.user_id);
+              const otherTeam = !on && teamOf(p.user_id) >= 0;
+              const isCap = d.captain_id === p.user_id;
               return (
-                <button key={m.user_id} onClick={() => toggleMember(i, m.user_id)} style={{
-                  border: on ? `1.5px solid ${C.blue}` : `1px solid ${C.border}`, background: on ? C.blueLight : "#fff",
-                  color: on ? C.blue : C.sub, borderRadius: 18, padding: "5px 11px", fontSize: 12.5, fontWeight: 700,
-                  fontFamily: "inherit", cursor: "pointer",
-                }}>{m.profiles?.name}</button>
+                <button key={p.user_id} onClick={() => assignTo(i, p.user_id)} disabled={otherTeam} style={{
+                  border: on ? `1.5px solid ${isCap ? C.orange : C.blue}` : `1px solid ${C.border}`,
+                  background: on ? (isCap ? C.orangeLight : C.blueLight) : "#fff",
+                  color: otherTeam ? C.sub2 : on ? (isCap ? C.orange : C.blue) : C.sub,
+                  opacity: otherTeam ? 0.4 : 1, borderRadius: 18, padding: "5px 11px", fontSize: 12.5, fontWeight: 700,
+                  fontFamily: "inherit", cursor: otherTeam ? "not-allowed" : "pointer",
+                }}>{isCap ? "👑 " : ""}{p.user_name}</button>
               );
             })}
           </div>
           {d.member_ids.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.sub, marginBottom: 6 }}>조장</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.sub, marginBottom: 6 }}>👑 조장 (오더·점수 입력 권한)</div>
               <select value={d.captain_id} onChange={(e) => upd(i, { captain_id: e.target.value })}
                 style={{ ...inputStyle, marginBottom: 0, color: d.captain_id ? C.text : C.sub2 }}>
-                <option value="">조장 선택 (오더·점수 입력 권한)</option>
-                {d.member_ids.map((id) => <option key={id} value={id}>{nameOf(id)}</option>)}
+                <option value="">조장 선택</option>
+                {d.member_ids.map((id) => <option key={id} value={id}>{nameById[id] || nameOf(id)}</option>)}
               </select>
             </div>
           )}
@@ -335,7 +437,7 @@ function SetupView({ tour, teams, teamMemberIds, members, nameOf, onGenerate, bu
       <Btn onClick={save} loading={saving} variant="gray" style={{ marginTop: 4 }}>팀 저장</Btn>
       <Btn onClick={onGenerate} loading={busy} style={{ marginTop: 10 }}>대진표 생성하기</Btn>
       <div style={{ fontSize: 12.5, color: C.sub2, textAlign: "center", marginTop: 10, lineHeight: 1.5 }}>
-        팀을 저장한 뒤 대진표를 생성하세요. 생성 후에는 팀·형식을 바꿀 수 없어요.
+        참가 신청한 부원만 팀에 넣을 수 있어요. 팀을 저장한 뒤 대진표를 생성하세요. 생성 후에는 팀·형식을 바꿀 수 없어요.
       </div>
     </>
   );
@@ -653,13 +755,25 @@ function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, isAdmi
     return ids.length ? ids.map(nameOf).join(", ") : "오더 미정";
   };
 
+  const capName = (teamId) => { const c = teamById[teamId]?.captain_id; return c ? nameOf(c) : null; };
+
   return (
     <Modal onClose={onClose}>
+      {/* 코트 강조 */}
+      {tie.court && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "#F0EBFE", borderRadius: 12, padding: "10px 12px", marginBottom: 12 }}>
+          <MapPin size={18} color={PURPLE} />
+          <span style={{ fontSize: 17, fontWeight: 800, color: PURPLE }}>{tie.court}</span>
+          {tie.play_order ? <span style={{ fontSize: 12.5, color: C.sub2, fontWeight: 600 }}>· 코트 내 {tie.play_order}번째</span> : null}
+        </div>
+      )}
       <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>
         {teamA?.name || "미정"} vs {teamB?.name || "미정"}
       </div>
-      <div style={{ fontSize: 13, color: C.sub2, marginBottom: 14 }}>
-        {tie.label}{tie.court ? ` · ${tie.court}${tie.play_order ? ` ${tie.play_order}번째` : ""}` : ""}
+      <div style={{ fontSize: 12.5, color: C.sub2, marginBottom: 6 }}>{tie.label}</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, fontSize: 12, color: C.orange, fontWeight: 700, flexWrap: "wrap" }}>
+        {capName(tie.team_a_id) && <span>👑 {teamA?.name}: {capName(tie.team_a_id)}</span>}
+        {capName(tie.team_b_id) && <span>👑 {teamB?.name}: {capName(tie.team_b_id)}</span>}
       </div>
 
       {!bothReady && (

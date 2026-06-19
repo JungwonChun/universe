@@ -22,7 +22,7 @@ const emptyDraft = {
   open_rule_day: "", open_rule_time: "",
   // 대회 설정
   format: "knockout", team_count: 4, players_per_team: 4,
-  num_singles: 1, num_doubles: 2, num_groups: 2, advance_per_group: 2, third_place: false,
+  num_singles: 1, num_doubles: 2, num_groups: 2, teams_per_group: 3, advance_per_group: 2, third_place: false,
   courts: "",
 };
 
@@ -115,10 +115,13 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
       if (!draft.event_date) { toast("대회 날짜를 선택해주세요"); return; }
       if (Number(draft.num_singles) + Number(draft.num_doubles) < 1) { toast("단식·복식 합이 1경기 이상이어야 해요"); return; }
       const isGroup = draft.format !== "knockout";
+      const teamCount = isGroup ? Number(draft.num_groups) * Number(draft.teams_per_group) : Number(draft.team_count);
+      if (isGroup && (Number(draft.num_groups) < 1 || Number(draft.teams_per_group) < 2)) { toast("조는 1개 이상, 조당 팀은 2팀 이상이어야 해요"); return; }
+      if (teamCount < 2) { toast("참가 팀이 2팀 이상이어야 해요"); return; }
       setBusy("save");
       const { data, error } = await supabase.rpc("create_tournament", {
         p_org: orgId, p_title: draft.title.trim(), p_date: draft.event_date, p_location: draft.location.trim() || null,
-        p_format: draft.format, p_team_count: Number(draft.team_count), p_ppt: Number(draft.players_per_team),
+        p_format: draft.format, p_team_count: teamCount, p_ppt: Number(draft.players_per_team),
         p_singles: Number(draft.num_singles), p_doubles: Number(draft.num_doubles),
         p_groups: isGroup ? Number(draft.num_groups) : null, p_advance: Number(draft.advance_per_group),
         p_third: draft.third_place, p_courts: parseCourts(draft.courts),
@@ -336,10 +339,14 @@ export default function ScheduleScreen({ uid, orgId, isAdmin, activities, opens,
               {DAY_NAMES.map((d, i) => <option key={i} value={i}>매주 {d}요일</option>)}
             </select>
           ) : (
-            <input type="date" style={inputStyle} value={draft.event_date}
-              onChange={(e) => setDraft({ ...draft, event_date: e.target.value })} />
+            <>
+              <div style={{ fontSize: 13, fontWeight: 800, color: C.text, margin: "2px 2px 6px" }}>📅 날짜 <span style={{ color: C.sub2, fontWeight: 600 }}>(칸을 눌러 달력에서 선택)</span></div>
+              <input type="date" style={inputStyle} value={draft.event_date}
+                onChange={(e) => setDraft({ ...draft, event_date: e.target.value })} />
+            </>
           )}
 
+          <div style={{ fontSize: 13, fontWeight: 800, color: C.text, margin: "2px 2px 6px" }}>⏰ 시간 <span style={{ color: C.sub2, fontWeight: 600 }}>(선택 · 시작–종료)</span></div>
           <div style={{ display: "flex", gap: 8 }}>
             <input type="time" style={{ ...inputStyle, flex: 1 }} value={draft.start_time}
               onChange={(e) => setDraft({ ...draft, start_time: e.target.value })} />
@@ -399,6 +406,7 @@ function TournamentConfig({ draft, setDraft }) {
   );
   return (
     <>
+      <div style={{ fontSize: 13, fontWeight: 800, color: C.text, margin: "2px 2px 6px" }}>📅 대회 날짜</div>
       <input type="date" style={inputStyle} value={draft.event_date}
         onChange={(e) => setDraft({ ...draft, event_date: e.target.value })} />
 
@@ -414,18 +422,35 @@ function TournamentConfig({ draft, setDraft }) {
         ))}
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        {numField("team_count", "참가 팀 수", 2)}
-        {numField("players_per_team", "팀당 인원", 1)}
-      </div>
+      {isGroup ? (
+        <>
+          <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+            {numField("num_groups", "조 개수", 1)}
+            {numField("teams_per_group", "조당 팀수", 2)}
+          </div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: TYPE_META.tournament.color, margin: "0 2px 10px" }}>
+            → 총 {(Number(draft.num_groups) || 0) * (Number(draft.teams_per_group) || 0)}팀 ({draft.num_groups || 0}개 조 × 조당 {draft.teams_per_group || 0}팀)
+          </div>
+        </>
+      ) : (
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          {numField("team_count", "참가 팀 수", 2)}
+          {numField("players_per_team", "팀당 인원", 1)}
+        </div>
+      )}
+      {isGroup && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          {numField("players_per_team", "팀당 인원", 1)}
+          {draft.format === "group_knockout" && numField("advance_per_group", "조별 진출 팀", 1)}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         {numField("num_singles", "단식 경기 수", 0)}
         {numField("num_doubles", "복식 경기 수", 0)}
       </div>
-      {isGroup && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          {numField("num_groups", "조 개수", 1)}
-          {draft.format === "group_knockout" && numField("advance_per_group", "조별 진출 팀", 1)}
+      {draft.format === "group_knockout" && (
+        <div style={{ fontSize: 12.5, color: C.sub2, margin: "0 2px 10px", lineHeight: 1.5 }}>
+          예) 조당 {draft.teams_per_group || 3}팀 · 상위 {draft.advance_per_group || 2}팀 본선 진출 → 1조 1등 vs 2조 2등 식으로 교차 대진이 자동 생성돼요.
         </div>
       )}
       {draft.format !== "group" && (

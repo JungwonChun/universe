@@ -59,8 +59,18 @@ export default function HomeScreen({
 
   return (
     <div>
+      {/* 진행 중 대회 — 가장 먼저, 가장 크게 */}
+      {myTours.map((t) => (
+        <TournamentWidget key={t.id} tour={t} uid={uid}
+          teams={tourTeams.filter((x) => x.tournament_id === t.id)}
+          ties={tourTies.filter((x) => x.tournament_id === t.id)}
+          matches={tourMatches.filter((x) => x.tournament_id === t.id)}
+          teamMembers={tourTeamMembers.filter((x) => x.tournament_id === t.id)}
+          onOpen={() => openTournament && openTournament(t.id)} />
+      ))}
+
       {/* 인사 카드 */}
-      <Card style={{ background: `linear-gradient(135deg, ${C.blue}, ${C.blueDark})`, color: "#fff" }}>
+      <Card style={{ marginTop: myTours.length ? 12 : 0, background: `linear-gradient(135deg, ${C.blue}, ${C.blueDark})`, color: "#fff" }}>
         <div style={{ fontSize: 14, opacity: 0.85, fontWeight: 600 }}>안녕하세요, {profile?.name}님 👋</div>
         <div style={{ fontSize: 23, fontWeight: 800, margin: "6px 0 14px", letterSpacing: "-0.5px" }}>
           지금까지 <span style={{ fontSize: 27 }}>{myCount}회</span> 참여했어요
@@ -81,16 +91,6 @@ export default function HomeScreen({
           )}
         </div>
       </Card>
-
-      {/* 진행 중 대회 위젯 */}
-      {myTours.map((t) => (
-        <TournamentWidget key={t.id} tour={t} uid={uid}
-          teams={tourTeams.filter((x) => x.tournament_id === t.id)}
-          ties={tourTies.filter((x) => x.tournament_id === t.id)}
-          matches={tourMatches.filter((x) => x.tournament_id === t.id)}
-          teamMembers={tourTeamMembers.filter((x) => x.tournament_id === t.id)}
-          onOpen={() => openTournament && openTournament(t.id)} />
-      ))}
 
       {/* 진행 중인 투표 */}
       {polls.length > 0 && (

@@ -264,6 +264,7 @@ export default function CommunityScreen({ uid, profile, org, orgId, isAdmin, pol
             onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
           <textarea style={{ ...inputStyle, resize: "none" }} rows={3} placeholder="내용 (실력대, 비용, 준비물 등)"
             value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
+          <div style={{ fontSize: 13, fontWeight: 800, color: C.text, margin: "2px 2px 6px" }}>📅 날짜 · 모집 인원 <span style={{ color: C.sub2, fontWeight: 600 }}>(날짜 칸을 눌러 선택)</span></div>
           <div style={{ display: "flex", gap: 8 }}>
             <input style={{ ...inputStyle, flex: 1.2 }} type="date" value={draft.meet_date}
               onChange={(e) => setDraft({ ...draft, meet_date: e.target.value })} />
