@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { supabase } from "../supabase.js";
-import { C, FONT, Card, Btn, inputStyle, useToast } from "../ui.jsx";
+import { C, FONT, Card, Btn, inputStyle, useToast, InstallPrompt } from "../ui.jsx";
 
 // 참가 코드 → 계정 매핑 (코드 자체가 로그인 자격)
 const codeEmail = (c) => `${c}@impact-ob.com`;
@@ -55,6 +55,7 @@ export default function AuthScreen() {
       display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
     }}>
       <div style={{ width: "100%", maxWidth: 400 }}>
+        <div style={{ marginBottom: 8 }}><InstallPrompt /></div>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 52, marginBottom: 8 }}>🎾</div>
           <div style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: "-0.6px" }}>새벽테니스</div>

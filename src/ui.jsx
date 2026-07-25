@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from "react";
+import { createContext, useContext, useState, useCallback, useEffect } from "react";
 
 /* ───────── 토스 스타일 토큰 ───────── */
 export const C = {
@@ -125,6 +125,50 @@ export function Confetti({ message }) {
           textShadow: "0 2px 12px rgba(255,255,255,0.9)", fontFamily: FONT,
         }}>{message}</div>
       )}
+    </div>
+  );
+}
+
+/* ───────── 홈 화면에 추가 (PWA 설치) ───────── */
+export function InstallPrompt() {
+  const [deferred, setDeferred] = useState(() => (typeof window !== "undefined" ? window.__deferredInstall : null));
+  const [ios, setIos] = useState(false);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (localStorage.getItem("universe_install_dismiss")) return;
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
+    if (standalone) return;
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent);
+    if (isIOS) { setIos(true); setShow(true); return; }
+    if (window.__deferredInstall) { setDeferred(window.__deferredInstall); setShow(true); }
+    const onReady = () => { setDeferred(window.__deferredInstall); setShow(true); };
+    window.addEventListener("install-ready", onReady);
+    return () => window.removeEventListener("install-ready", onReady);
+  }, []);
+
+  if (!show) return null;
+  const dismiss = () => { setShow(false); try { localStorage.setItem("universe_install_dismiss", "1"); } catch {} };
+  const install = async () => {
+    if (!deferred) return;
+    deferred.prompt();
+    try { await deferred.userChoice; } catch {}
+    window.__deferredInstall = null; dismiss();
+  };
+
+  return (
+    <div style={{ margin: "0 16px 8px", background: "#F0EBFE", border: "1px solid #7B5CF0", borderRadius: 14, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+      <span style={{ fontSize: 22 }}>📲</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 800, color: C.text }}>홈 화면에 앱으로 추가</div>
+        <div style={{ fontSize: 12, color: C.sub2, marginTop: 2 }}>
+          {ios ? <>Safari 하단 <b>공유</b> → <b>홈 화면에 추가</b></> : "한 번 추가하면 앱처럼 바로 열려요"}
+        </div>
+      </div>
+      {!ios && (
+        <button onClick={install} style={{ border: "none", background: "#7B5CF0", color: "#fff", borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 800, fontFamily: FONT, cursor: "pointer", flexShrink: 0 }}>추가</button>
+      )}
+      <button onClick={dismiss} style={{ border: "none", background: "transparent", color: C.sub2, fontSize: 16, fontWeight: 800, cursor: "pointer", padding: "0 2px", flexShrink: 0 }}>✕</button>
     </div>
   );
 }

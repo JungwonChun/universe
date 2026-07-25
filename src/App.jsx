@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, Component } from "react";
 import { Home, MessagesSquare, CalendarDays, UserRound } from "lucide-react";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import { supabase, configured } from "./supabase.js";
-import { C, FONT, ToastProvider, Avatar } from "./ui.jsx";
+import { C, FONT, ToastProvider, Avatar, InstallPrompt } from "./ui.jsx";
 import { ymd } from "./lib/schedule.js";
 import AuthScreen from "./screens/Auth.jsx";
 import OnboardingScreen from "./screens/Onboarding.jsx";
@@ -273,6 +273,8 @@ function Shell({ session, profile, membership, myOrgs, switchOrg, addOrg, reload
             <span style={{ color: "#7DB3FF" }}>업데이트</span>
           </div>
         )}
+
+        <InstallPrompt />
 
         {/* 콘텐츠 */}
         <div ref={scrollRef} style={{ flex: 1, padding: "4px 16px 24px" }}>
