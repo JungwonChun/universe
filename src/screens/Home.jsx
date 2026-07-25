@@ -17,8 +17,13 @@ export default function HomeScreen({
   const todayKey = ymd(today);
   const myCount = counts[uid] || 0;
 
-  // 진행 중/모집 중 대회 (참가 모집=setup, 진행 중=group/knockout)
-  const liveTours = tournaments.filter((t) => t.stage === "setup" || t.stage === "group" || t.stage === "knockout");
+  // 대회는 '해당 일자'에만 홈에 표시 (연결된 일정의 event_date === 오늘)
+  const actOf = (t) => activities.find((a) => a.id === t.activity_id);
+  const liveTours = tournaments.filter((t) => {
+    if (!["setup", "group", "knockout"].includes(t.stage)) return false;
+    const a = actOf(t);
+    return a && a.event_date === todayKey;
+  });
 
   const tourJoin = async (tid, joined) => {
     if (joined) await supabase.from("tournament_participants").delete().eq("tournament_id", tid).eq("user_id", uid);
@@ -26,8 +31,8 @@ export default function HomeScreen({
     reload();
   };
 
-  // 오늘 진행되는 일정 (레슨·행사·대회)
-  const todayActs = activities.filter((a) => occursOn(a, today))
+  // 오늘 진행되는 일정 (레슨·행사) — 대회는 위 위젯으로 대신 표시
+  const todayActs = activities.filter((a) => a.type !== "tournament" && occursOn(a, today))
     .sort((x, y) => String(x.start_time || "99").localeCompare(String(y.start_time || "99")));
 
   const actById = Object.fromEntries(activities.map((a) => [a.id, a]));
@@ -247,8 +252,9 @@ function TournamentWidget({ tour, uid, teams, ties, matches, teamMembers, onOpen
   // 내 차례 / 다음 경기 — 코트가 있으면 코트 스케줄(지금 칠 경기) 기준
   const courts = tour.courts || [];
   let myTurn = null, myNext = null;
-  if (courts.length) {
-    for (const s of courtSchedule(courts, ties, matches)) {
+  const sched = courtSchedule(tour, ties, matches);
+  if (sched.length) {
+    for (const s of sched) {
       if (s.game && [...matchPlayers(s.game, "a"), ...matchPlayers(s.game, "b")].includes(uid)) {
         myTurn = { tie: s.tie, match: s.game, court: s.court }; break;
       }

@@ -1057,3 +1057,8 @@ begin
   if p_side='a' then update tournament_ties set a_submitted = true where id = p_tie;
   else update tournament_ties set b_submitted = true where id = p_tie; end if;
 end $$;
+
+-- ============================================================
+-- v8: 본선 전용 코트 지정
+-- ============================================================
+alter table public.tournaments add column if not exists ko_courts text[];

@@ -7,7 +7,7 @@ import { C, Card, Btn, Modal, SectionTitle, inputStyle, useToast, Confetti, Avat
 
 const PURPLE = "#7B5CF0";
 import {
-  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress, courtSchedule, courtBoard,
+  FORMAT_LABEL, buildBracket, buildGroups, standings, tieAgg, currentMatch, progress, courtSchedule, courtBoard, partitionCourts,
   matchPlayers, matchScoreText, slotLabel,
 } from "../lib/tournament.js";
 
@@ -22,6 +22,8 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
   const [loaded, setLoaded] = useState(false);
   const [selTie, setSelTie] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [koModal, setKoModal] = useState(false);
+  const [koPick, setKoPick] = useState([]);
   const toast = useToast();
 
   const nameOf = useCallback((id) => members.find((m) => m.user_id === id)?.profiles?.name || "?", [members]);
@@ -115,10 +117,10 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
     reload();
   };
 
-  /* 내 차례 찾기 — 코트가 있으면 코트 스케줄 기준, 없으면 진행 중 대진의 현재 게임 */
-  const sched = courts.length ? courtSchedule(courts, ties, matches) : [];
+  /* 내 차례 찾기 — 코트 스케줄 기준 */
+  const sched = courtSchedule(tour, ties, matches);
   let myTurn = null;
-  if (courts.length) {
+  if (sched.length) {
     for (const s of sched) {
       if (s.game && [...matchPlayers(s.game, "a"), ...matchPlayers(s.game, "b")].includes(uid)) {
         myTurn = { tie: s.tie, match: s.game, court: s.court }; break;
@@ -155,7 +157,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
     reload();
   };
 
-  const genKnockout = async () => {
+  const genKnockout = async (koCourts) => {
     const labels = [...new Set(teams.map((t) => t.group_label).filter(Boolean))].sort();
     const perGroup = labels.map((l) => standings(teams, ties, matches, l).slice(0, tour.advance_per_group));
     // 시드 순서: 모든 조 1위 → 모든 조 2위 → ... (buildBracket의 시드 배치가 1위 vs 2위 교차로 풀어줌)
@@ -166,10 +168,12 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
     }
     if (ordered.length < 2) { toast("본선 진출 팀이 부족해요"); return; }
     setBusy(true);
+    await supabase.from("tournaments").update({ ko_courts: koCourts && koCourts.length ? koCourts : null }).eq("id", tour.id);
     const { ties: kties } = buildBracket(tour, ordered, "knockout");
     const { error } = await supabase.rpc("seed_bracket", { p_tour: tour.id, p_stage: "knockout", p_groups: null, p_ties: kties });
     setBusy(false);
     if (error) { toast(error.message); return; }
+    setKoModal(false);
     toast("본선 토너먼트를 생성했어요 🏆");
     reload();
   };
@@ -255,7 +259,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
 
       {/* 코트별 경기 현황 */}
       {tour.stage !== "setup" && courts.length > 0 && (
-        <CourtBoard board={courtBoard(courts, ties, matches)} teamById={teamById} uid={uid} nameOf={nameOf} onTie={setSelTie} />
+        <CourtBoard board={courtBoard(tour, ties, matches)} teamById={teamById} uid={uid} nameOf={nameOf} onTie={setSelTie} />
       )}
 
       {/* 공지 */}
@@ -328,11 +332,34 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
             </div>
           ))}
           {tour.format === "group_knockout" && knockoutTies.length === 0 && isAdmin && (
-            <Btn onClick={genKnockout} loading={busy} disabled={!groupDone} style={{ marginTop: 16 }}>
+            <Btn onClick={() => { setKoPick(courts); setKoModal(true); }} loading={busy} disabled={!groupDone} style={{ marginTop: 16 }}>
               {groupDone ? "본선 토너먼트 생성하기 🏆" : "조별 예선이 모두 끝나면 본선을 만들 수 있어요"}
             </Btn>
           )}
         </>
+      )}
+
+      {/* 본선 코트 선택 모달 */}
+      {koModal && (
+        <Modal onClose={() => setKoModal(false)}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 6 }}>본선에서 쓸 코트 선택</div>
+          <div style={{ fontSize: 13, color: C.sub2, marginBottom: 14 }}>선택한 코트에서 4강·결승 경기를 진행해요.</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+            {courts.map((c) => {
+              const on = koPick.includes(c);
+              return (
+                <button key={c} onClick={() => setKoPick(on ? koPick.filter((x) => x !== c) : [...koPick, c])} style={{
+                  border: on ? `2px solid ${PURPLE}` : `1px solid ${C.border}`, background: on ? "#F0EBFE" : "#fff",
+                  color: on ? PURPLE : C.sub, borderRadius: 12, padding: "10px 16px", fontSize: 14, fontWeight: 800,
+                  fontFamily: "inherit", cursor: "pointer",
+                }}>{c}</button>
+              );
+            })}
+          </div>
+          <Btn onClick={() => koPick.length ? genKnockout(koPick) : toast("코트를 1개 이상 선택해주세요")} loading={busy}>
+            이 코트로 본선 생성 ({koPick.length}코트)
+          </Btn>
+        </Modal>
       )}
 
       {/* 토너먼트 대진표 (시각화) */}
@@ -353,6 +380,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
         <TieDetail
           tie={ties.find((t) => t.id === selTie)} tour={tour} teamById={teamById}
           matches={tieMatches(selTie)} teamMemberIds={teamMemberIds} nameOf={nameOf}
+          tieCourts={tieCourtsOf(ties.find((t) => t.id === selTie), tour, ties, courts)}
           isAdmin={isAdmin} isCaptainOf={isCaptainOf} uid={uid} reload={reload} toast={toast}
           onClose={() => setSelTie(null)}
         />
@@ -517,12 +545,7 @@ function TieRow({ tie, teamById, matches, onClick }) {
           {b}{winB && " 🏆"}
         </span>
       </div>
-      <div style={{ textAlign: "center", marginTop: 6, display: "flex", justifyContent: "center", gap: 6, alignItems: "center" }}>
-        {tie.court && (
-          <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 6, padding: "2px 8px", background: "#F0EBFE", color: "#7B5CF0", display: "inline-flex", alignItems: "center", gap: 3 }}>
-            <MapPin size={10} /> {tie.court}{tie.play_order ? ` ${tie.play_order}번째` : ""}
-          </span>
-        )}
+      <div style={{ textAlign: "center", marginTop: 6 }}>
         <span style={{
           fontSize: 11, fontWeight: 700, borderRadius: 6, padding: "2px 8px",
           background: done ? C.bg : tie.status === "ongoing" ? C.greenLight : C.bg,
@@ -758,8 +781,18 @@ function Bracket({ ties, teamById, matches, uid, teamMemberIds, onTie }) {
   );
 }
 
+// 대진이 쓰는 코트 풀 (조별=그 조 코트, 본선=ko_courts)
+function tieCourtsOf(tie, tour, ties, courts) {
+  if (!tie) return [];
+  if (tie.stage === "knockout") return (tour.ko_courts && tour.ko_courts.length) ? tour.ko_courts : courts;
+  const labels = [...new Set(ties.filter((t) => t.stage === "group").map((t) => t.group_label).filter(Boolean))].sort();
+  const gi = labels.indexOf(tie.group_label);
+  const chunks = partitionCourts(courts, labels.length || 1);
+  return gi >= 0 ? chunks[gi] : courts;
+}
+
 /* ───────── 대진 상세 (오더·점수) ───────── */
-function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, isAdmin, isCaptainOf, uid, reload, toast, onClose }) {
+function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, tieCourts, isAdmin, isCaptainOf, uid, reload, toast, onClose }) {
   const [orderSide, setOrderSide] = useState(null); // 'a'|'b'
   const [scoreMatch, setScoreMatch] = useState(null);
   if (!tie) return null;
@@ -786,11 +819,10 @@ function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, isAdmi
   return (
     <Modal onClose={onClose}>
       {/* 코트 강조 */}
-      {tie.court && (
+      {tieCourts && tieCourts.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "#F0EBFE", borderRadius: 12, padding: "10px 12px", marginBottom: 12 }}>
           <MapPin size={18} color={PURPLE} />
-          <span style={{ fontSize: 17, fontWeight: 800, color: PURPLE }}>{tie.court}</span>
-          {tie.play_order ? <span style={{ fontSize: 12.5, color: C.sub2, fontWeight: 600 }}>· 코트 내 {tie.play_order}번째</span> : null}
+          <span style={{ fontSize: 16, fontWeight: 800, color: PURPLE }}>{tieCourts.join(" · ")}</span>
         </div>
       )}
       <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 4 }}>

@@ -24,74 +24,91 @@ export function slotLabel(m) {
 const nextPow2 = (n) => { let p = 1; while (p < n) p *= 2; return p; };
 const log2 = (n) => Math.round(Math.log2(n));
 
-// 대진을 코트에 골고루 배정 (한 대진 = 한 코트 고정). play_order = 코트 내 진행 순서.
-function assignCourts(ties, courts) {
-  if (!courts || courts.length === 0) return;
-  const perCourt = {};
-  ties.forEach((tie, i) => {
-    const court = courts[i % courts.length];
-    tie.court = court;
-    perCourt[court] = (perCourt[court] || 0) + 1;
-    tie.play_order = perCourt[court];
-  });
+const playersOf = (m) => [...(m.a_players || []), ...(m.b_players || [])];
+
+// 코트를 그룹 수만큼 연속 균등 분할 (예: 4코트·2조 → [[1,2],[3,4]])
+export function partitionCourts(courts, n) {
+  const res = Array.from({ length: n }, () => []);
+  if (!n) return res;
+  const base = Math.floor(courts.length / n), extra = courts.length % n;
+  let i = 0;
+  for (let g = 0; g < n; g++) { const cnt = base + (g < extra ? 1 : 0); res[g] = courts.slice(i, i + cnt); i += cnt; }
+  return res;
 }
 
-// 코트 스케줄: 코트마다 "지금 칠 경기 1개"를 배정해서 모든 코트를 가동.
-// 기본은 대진의 자기 코트에서 진행하되, 빈 코트는 가장 느린(남은 게임 많은) 대진의 게임을 끌어와 채운다.
-// 반환: [{ court, game(match|null), tie|null }] — courts 순서대로.
-export function courtSchedule(courts, ties, matches) {
-  const slots = (courts || []).map((c) => ({ court: c, game: null, tie: null }));
-  if (!slots.length) return slots;
-  // 양 팀 확정 + 양 팀 오더 제출 + 미종료 = 칠 수 있는 대진
-  const playable = ties.filter((t) => t.team_a_id && t.team_b_id && t.a_submitted && t.b_submitted && t.status !== "done");
+// 코트 스케줄. 반환: [{ court, game, tie, group }]
+// 조별: 코트를 조에 분배(1조→앞쪽 코트, 2조→뒤쪽), 조마다 '한 대진'씩만 그 조 코트에 펼침(안 섞임).
+// 본선: ko_courts(관리자 지정)에서 준비된 대진들을 병렬로 진행.
+export function courtSchedule(tour, ties, matches) {
+  const courts = (tour && tour.courts) || [];
   const gamesOf = (id) => matches.filter((m) => m.tie_id === id).sort((a, b) => a.order_index - b.order_index);
-  const pending = {};
-  for (const t of playable) pending[t.id] = gamesOf(t.id).filter((m) => m.status !== "done");
-  const assigned = new Set();
-  const busy = new Set(); // 동시에 두 코트에 못 서는 선수
-  const playersOf = (m) => [...(m.a_players || []), ...(m.b_players || [])];
-  const free = (m) => playersOf(m).every((p) => !busy.has(p));
-  const take = (slot, t, g) => { slot.game = g; slot.tie = t; assigned.add(g.id); playersOf(g).forEach((p) => busy.add(p)); };
+  const pendOf = (tie) => gamesOf(tie.id).filter((m) => m.status !== "done");
+  const ready = (t) => t.team_a_id && t.team_b_id && t.a_submitted && t.b_submitted && t.status !== "done";
+  const koTies = ties.filter((t) => t.stage === "knockout");
+  const groupTies = ties.filter((t) => t.stage === "group");
 
-  // 1) 자기 코트: 그 코트에 배정된 대진의 가장 빠른 미완료 게임
-  for (const slot of slots) {
-    const home = playable.filter((t) => t.court === slot.court).sort((a, b) => (a.play_order || 0) - (b.play_order || 0));
-    for (const t of home) {
-      const g = (pending[t.id] || []).find((m) => !assigned.has(m.id) && free(m));
-      if (g) { take(slot, t, g); break; }
+  // 본선 생성 이후 → 본선 코트 스케줄
+  if (koTies.length) {
+    const koCourts = (tour && tour.ko_courts && tour.ko_courts.length) ? tour.ko_courts : courts;
+    const slots = koCourts.map((c) => ({ court: c, game: null, tie: null, group: "ko" }));
+    const busy = new Set(), assigned = new Set();
+    const take = (slot, t, g) => { slot.game = g; slot.tie = t; assigned.add(g.id); playersOf(g).forEach((p) => busy.add(p)); };
+    const rt = koTies.filter(ready).sort((a, b) => (a.round - b.round) || ((a.bracket_index || 0) - (b.bracket_index || 0)));
+    let ci = 0;
+    for (const t of rt) { // 준비된 대진마다 코트 하나씩 (병렬)
+      if (ci >= slots.length) break;
+      const g = pendOf(t).find((m) => !assigned.has(m.id) && playersOf(m).every((p) => !busy.has(p)));
+      if (g) { take(slots[ci], t, g); ci++; }
     }
-  }
-  // 2) 빈 코트: 남은 게임이 가장 많은(느린) 대진의 게임을 끌어와 채움 (선수 겹치면 건너뜀)
-  for (const slot of slots) {
-    if (slot.game) continue;
-    const cands = playable
-      .map((t) => ({ t, avail: (pending[t.id] || []).filter((m) => !assigned.has(m.id)) }))
-      .filter((x) => x.avail.length)
-      .sort((a, b) => b.avail.length - a.avail.length || (a.t.play_order || 0) - (b.t.play_order || 0));
-    let done = false;
-    for (const cand of cands) {
-      const g = cand.avail.find((m) => free(m));
-      if (g) { take(slot, cand.t, g); done = true; break; }
+    for (let s = ci; s < slots.length; s++) { // 남는 코트는 남은 게임으로 채움
+      for (const t of rt) {
+        const g = pendOf(t).find((m) => !assigned.has(m.id) && playersOf(m).every((p) => !busy.has(p)));
+        if (g) { take(slots[s], t, g); break; }
+      }
     }
-    if (!done) break;
+    return slots;
   }
-  return slots;
+
+  // 조별 스케줄
+  const labels = [...new Set(groupTies.map((t) => t.group_label).filter(Boolean))].sort();
+  if (!labels.length || !courts.length) return [];
+  const chunks = partitionCourts(courts, labels.length);
+  const out = [];
+  labels.forEach((label, gi) => {
+    const gc = chunks[gi] || [];
+    const gt = groupTies.filter((t) => t.group_label === label && t.status !== "done")
+      .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    const current = gt.find(ready) || null; // 한 대진씩
+    const busy = new Set(), assigned = new Set();
+    const slots = gc.map((c) => ({ court: c, game: null, tie: null, group: label }));
+    if (current) {
+      const pend = pendOf(current);
+      for (const slot of slots) {
+        const g = pend.find((m) => !assigned.has(m.id) && playersOf(m).every((p) => !busy.has(p)));
+        if (g) { slot.game = g; slot.tie = current; assigned.add(g.id); playersOf(g).forEach((p) => busy.add(p)); }
+      }
+    }
+    out.push(...slots);
+  });
+  return out;
 }
 
-// 코트별 상태판: 'playing'(진행중) | 'upcoming'(진행예정) | 'empty'(비어있음)
-export function courtBoard(courts, ties, matches) {
-  const slots = courtSchedule(courts, ties, matches);
+// 코트별 상태판: 'playing' | 'upcoming' | 'empty'
+export function courtBoard(tour, ties, matches) {
+  const slots = courtSchedule(tour, ties, matches);
+  const groupTies = ties.filter((t) => t.stage === "group");
+  const koTies = ties.filter((t) => t.stage === "knockout");
+  const inKo = koTies.length > 0;
+  const reasonFor = (t) => (!t.team_a_id || !t.team_b_id) ? "팀 확정 대기" : (!t.a_submitted || !t.b_submitted) ? "오더 대기" : "대기";
   const playingTieIds = new Set(slots.filter((s) => s.tie).map((s) => s.tie.id));
   return slots.map((s) => {
     if (s.game) return { court: s.court, state: "playing", game: s.game, tie: s.tie };
-    const up = ties
-      .filter((t) => t.court === s.court && t.status !== "done" && !playingTieIds.has(t.id))
-      .sort((a, b) => (a.play_order || 0) - (b.play_order || 0))[0];
-    if (up) {
-      const ready = up.team_a_id && up.team_b_id;
-      const reason = !ready ? "팀 확정 대기" : (!up.a_submitted || !up.b_submitted) ? "오더 대기" : "대기";
-      return { court: s.court, state: "upcoming", tie: up, reason };
-    }
+    const pool = (inKo
+      ? koTies.filter((t) => t.status !== "done" && !playingTieIds.has(t.id))
+      : groupTies.filter((t) => t.group_label === s.group && t.status !== "done" && !playingTieIds.has(t.id))
+    ).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    const up = pool[0];
+    if (up) return { court: s.court, state: "upcoming", tie: up, reason: reasonFor(up) };
     return { court: s.court, state: "empty" };
   });
 }
@@ -164,7 +181,6 @@ export function buildBracket(t, teamIds, stage = "knockout") {
     prev = next;
     round++;
   }
-  assignCourts(ties, t.courts);
   return { groups: null, ties };
 }
 
@@ -192,7 +208,6 @@ export function buildGroups(t, teams) {
           next_tmp_id: null, next_slot: null, matches: matchSkeleton(t),
         });
   });
-  assignCourts(ties, t.courts);
   return { groups, ties };
 }
 
