@@ -2,13 +2,27 @@ import { useState } from "react";
 import { supabase } from "../supabase.js";
 import { C, FONT, Card, Btn, inputStyle, useToast } from "../ui.jsx";
 
+// 참가 코드 → 계정 매핑 (코드 자체가 로그인 자격)
+const codeEmail = (c) => `${c}@impact-ob.com`;
+const codePassword = (c) => `${c}-impactOB2026`;
+
 export default function AuthScreen() {
-  const [mode, setMode] = useState("login"); // login | signup
+  const [mode, setMode] = useState("code"); // code | login | signup
+  const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const toast = useToast();
+
+  const codeLogin = async () => {
+    const c = code.trim().toLowerCase();
+    if (!c) { toast("참가 코드를 입력해주세요 (예: a01)"); return; }
+    setBusy(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: codeEmail(c), password: codePassword(c) });
+    setBusy(false);
+    if (error) toast("코드를 다시 확인해주세요 (예: a01, b03…)");
+  };
 
   const submit = async () => {
     if (!email.trim() || !pw) { toast("이메일과 비밀번호를 입력해주세요"); return; }
@@ -45,35 +59,52 @@ export default function AuthScreen() {
           <div style={{ fontSize: 52, marginBottom: 8 }}>🎾</div>
           <div style={{ fontSize: 26, fontWeight: 800, color: C.text, letterSpacing: "-0.6px" }}>새벽테니스</div>
           <div style={{ fontSize: 14.5, color: C.sub2, marginTop: 6, fontWeight: 500 }}>
-            선착순 신청부터 모집까지, 동아리 운영을 한 곳에서
+            대회·일정·모집을 한 곳에서
           </div>
         </div>
 
-        <Card>
-          {mode === "signup" && (
-            <input style={inputStyle} placeholder="이름 (동아리에서 쓰는 이름)" value={name}
-              onChange={(e) => setName(e.target.value)} />
-          )}
-          <input style={inputStyle} type="email" placeholder="이메일" value={email}
-            onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" />
-          <input style={inputStyle} type="password" placeholder="비밀번호 (6자 이상)" value={pw}
-            onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
-          <Btn onClick={submit} loading={busy} style={{ marginTop: 4 }}>
-            {mode === "login" ? "로그인" : "가입하기"}
-          </Btn>
-        </Card>
-
-        <div style={{ textAlign: "center", marginTop: 18, fontSize: 14, color: C.sub }}>
-          {mode === "login" ? (
-            <>처음이신가요?{" "}
-              <span onClick={() => setMode("signup")} style={{ color: C.blue, fontWeight: 700, cursor: "pointer" }}>회원가입</span>
-            </>
-          ) : (
-            <>이미 계정이 있나요?{" "}
-              <span onClick={() => setMode("login")} style={{ color: C.blue, fontWeight: 700, cursor: "pointer" }}>로그인</span>
-            </>
-          )}
-        </div>
+        {mode === "code" ? (
+          <>
+            <Card>
+              <div style={{ fontSize: 15, fontWeight: 800, color: C.text, marginBottom: 4 }}>참가 코드로 입장</div>
+              <div style={{ fontSize: 13, color: C.sub2, marginBottom: 12 }}>대회 안내에서 받은 코드를 입력하세요 (예: a01)</div>
+              <input style={{ ...inputStyle, textAlign: "center", fontSize: 22, fontWeight: 800, letterSpacing: 4 }}
+                placeholder="a01" value={code} maxLength={12}
+                onChange={(e) => setCode(e.target.value)} autoCapitalize="none"
+                onKeyDown={(e) => e.key === "Enter" && codeLogin()} />
+              <Btn onClick={codeLogin} loading={busy}>입장하기</Btn>
+            </Card>
+            <div style={{ textAlign: "center", marginTop: 18, fontSize: 14, color: C.sub }}>
+              관리자세요?{" "}
+              <span onClick={() => setMode("login")} style={{ color: C.blue, fontWeight: 700, cursor: "pointer" }}>이메일로 로그인</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <Card>
+              {mode === "signup" && (
+                <input style={inputStyle} placeholder="이름" value={name}
+                  onChange={(e) => setName(e.target.value)} />
+              )}
+              <input style={inputStyle} type="email" placeholder="이메일" value={email}
+                onChange={(e) => setEmail(e.target.value)} autoCapitalize="none" />
+              <input style={inputStyle} type="password" placeholder="비밀번호 (6자 이상)" value={pw}
+                onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+              <Btn onClick={submit} loading={busy} style={{ marginTop: 4 }}>
+                {mode === "login" ? "로그인" : "가입하기"}
+              </Btn>
+            </Card>
+            <div style={{ textAlign: "center", marginTop: 18, fontSize: 14, color: C.sub }}>
+              <span onClick={() => setMode("code")} style={{ color: C.blue, fontWeight: 700, cursor: "pointer" }}>← 참가 코드로 입장</span>
+              <span style={{ margin: "0 8px", color: C.border }}>|</span>
+              {mode === "login" ? (
+                <span onClick={() => setMode("signup")} style={{ color: C.blue, fontWeight: 700, cursor: "pointer" }}>회원가입</span>
+              ) : (
+                <span onClick={() => setMode("login")} style={{ color: C.blue, fontWeight: 700, cursor: "pointer" }}>로그인</span>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
