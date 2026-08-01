@@ -86,8 +86,8 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
 
   const teamMemberIds = (teamId) => teamMembers.filter((m) => m.team_id === teamId).map((m) => m.user_id);
   const teamById = Object.fromEntries(teams.map((t) => [t.id, t]));
-  const isCaptainOf = (teamId) => teamById[teamId]?.captain_id === uid;
-  const iAmCaptain = teams.some((t) => t.captain_id === uid);
+  const isCaptainOf = (teamId) => { const t = teamById[teamId]; return !!t && (t.captain_id === uid || (t.co_captains || []).includes(uid)); };
+  const iAmCaptain = teams.some((t) => t.captain_id === uid || (t.co_captains || []).includes(uid));
   const myTeam = teams.find((t) => teamMemberIds(t.id).includes(uid)) || null;
   const canPostNotice = isAdmin || iAmCaptain;
   const courts = tour.courts || [];
@@ -213,7 +213,7 @@ export default function TournamentScreen({ tournamentId, orgId, uid, isAdmin, me
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
             {teamMemberIds(myTeam.id).map((id) => {
-              const cap = myTeam.captain_id === id;
+              const cap = myTeam.captain_id === id || (myTeam.co_captains || []).includes(id);
               return (
                 <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: cap ? C.orangeLight : C.bg, color: cap ? C.orange : C.sub, borderRadius: 16, padding: "4px 10px 4px 4px", fontSize: 12.5, fontWeight: cap ? 800 : 600 }}>
                   <Avatar name={nameOf(id)} size={18} />{cap ? "👑 " : ""}{nameOf(id)}{id === uid ? " (나)" : ""}
@@ -814,7 +814,11 @@ function TieDetail({ tie, tour, teamById, matches, teamMemberIds, nameOf, tieCou
     return ids.length ? ids.map(nameOf).join(", ") : "오더 미정";
   };
 
-  const capName = (teamId) => { const c = teamById[teamId]?.captain_id; return c ? nameOf(c) : null; };
+  const capName = (teamId) => {
+    const t = teamById[teamId]; if (!t) return null;
+    const ids = [t.captain_id, ...(t.co_captains || [])].filter(Boolean);
+    return ids.length ? ids.map(nameOf).join(", ") : null;
+  };
 
   return (
     <Modal onClose={onClose}>
