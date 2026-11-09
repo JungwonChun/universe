@@ -84,6 +84,27 @@ git push -u origin main
 | 참여 랭킹 | 확정 신청 누적 횟수 자동 집계 |
 | 업데이트 | 코드를 고쳐 git push만 하면 Vercel이 자동 재배포, 사용자 앱에 "새 버전" 배너가 떠요 |
 
+## Docker CI/CD (자체 서버 배포)
+
+Vercel 배포와 별도로, Docker 이미지로 내 컴퓨터(Self-hosted Runner)에 자동 배포하는 경로가 있어요.
+
+```
+git push (main) → CI: 이미지 빌드·검사 → Docker Hub 업로드
+                → CD: Self-hosted Runner가 새 이미지 pull → blue/green 무중단 교체 → 배포 전·중·후 요청 검증
+```
+
+| 파일 | 역할 |
+|---|---|
+| `Dockerfile` | Node로 `vite build` → nginx로 서빙 (`/healthz`, `/version.json` 제공) |
+| `.github/workflows/ci.yml` | 이미지 빌드, 컨테이너 smoke test, Docker Hub에 `latest`·커밋 SHA 태그로 push |
+| `.github/workflows/deploy.yml` | CI 성공 시 Runner에서 배포, 1초 간격 요청으로 무중단 여부를 Summary에 기록 |
+| `deploy/deploy.sh` | blue/green 교체: 새 컨테이너 healthy 확인 → proxy reload → 이전 컨테이너 종료 (실패 시 기존 유지) |
+| `deploy/monitor.py` | 배포 전·중·후 요청 기록과 요약 |
+
+필요한 GitHub Secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`(Read & Write), `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
+Runner는 `universe` 라벨로 등록하고 `./run.sh`를 켜 두면 되고, 서비스 주소는 `http://127.0.0.1:8090`이에요.
+PR 이벤트로는 실행되지 않으므로 외부 PR 코드가 Runner에서 돌지 않아요.
+
 ## 로컬에서 개발하려면
 
 ```bash

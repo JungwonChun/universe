@@ -1,0 +1,64 @@
+name: CI - Build & Push Docker image
+
+# main에 push하면 이미지를 빌드·검사한 뒤 Docker Hub에 올린다.
+# (PR 이벤트는 받지 않는다: 외부 PR 코드가 배포로 이어지지 않게)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  docker-build-push:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/universe
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build info
+        id: meta
+        run: |
+          echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "time=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: universe:ci
+          build-args: |
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+            APP_VERSION=${{ steps.meta.outputs.short }}
+            BUILD_TIME=${{ steps.meta.outputs.time }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test container
+        run: |
+          docker run -d --name smoke -p 8080:80 universe:ci
+          for i in $(seq 1 30); do curl -fs localhost:8080/healthz && break; sleep 1; done
+          curl -fs localhost:8080/ | grep -q '<div id="root">'
+          curl -fs localhost:8080/tournament/any | grep -q '<div id="root">'   # SPA 경로
+          curl -fs localhost:8080/version.json | tee /dev/stderr | grep -q '"${{ steps.meta.outputs.short }}"'
+          docker rm -f smoke
+
+      - name: Push image to Docker Hub
+        run: |
+          for tag in latest "${GITHUB_SHA}"; do
+            docker tag universe:ci "$IMAGE:$tag"
+            docker push -q "$IMAGE:$tag"
+          done
+          echo "### Docker Hub에 올린 이미지" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`universe:latest\`, \`universe:${GITHUB_SHA}\` (버전 ${{ steps.meta.outputs.short }}, ${{ steps.meta.outputs.time }})" >> "$GITHUB_STEP_SUMMARY"
