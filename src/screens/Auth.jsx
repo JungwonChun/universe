@@ -106,6 +106,12 @@ export default function AuthScreen() {
             </div>
           </>
         )}
+
+        {/* 배포 버전 표시 (Docker 빌드 시 커밋 SHA·빌드 시각이 들어감) */}
+        <div style={{ textAlign: "center", marginTop: 28, fontSize: 11.5, color: C.sub2 }}>
+          버전 {import.meta.env.VITE_APP_VERSION || "web"}
+          {import.meta.env.VITE_BUILD_TIME && ` · ${import.meta.env.VITE_BUILD_TIME} 배포`}
+        </div>
       </div>
     </div>
   );
